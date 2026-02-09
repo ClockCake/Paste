@@ -27,6 +27,14 @@ enum ClipboardEntryKind: String, CaseIterable {
             return "photo"
         }
     }
+
+    func localizedTitle(_ l: L) -> String {
+        switch self {
+        case .text: return l.kindText
+        case .url: return l.kindURL
+        case .image: return l.kindImage
+        }
+    }
 }
 
 enum ClipboardFilter: String, CaseIterable, Identifiable {
@@ -60,6 +68,15 @@ enum ClipboardFilter: String, CaseIterable, Identifiable {
             return .url
         case .image:
             return .image
+        }
+    }
+
+    func localizedTitle(_ l: L) -> String {
+        switch self {
+        case .all: return l.filterAll
+        case .text: return l.filterText
+        case .url: return l.filterURL
+        case .image: return l.filterImage
         }
     }
 }

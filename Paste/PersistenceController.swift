@@ -11,26 +11,41 @@ final class PersistenceController {
     private init() {
         let model = Self.makeManagedObjectModel()
         let storeURL = Self.makeStoreURL()
-        let cloudContainerIdentifier = Self.defaultCloudContainerIdentifier()
 
         thumbnailCache = ThumbnailCache()
 
-        if let cloudContainer = try? Self.makeContainer(
-            managedObjectModel: model,
-            storeURL: storeURL,
-            cloudKitContainerIdentifier: cloudContainerIdentifier
-        ) {
-            container = cloudContainer
-            cloudSyncEnabled = true
-        } else if let localContainer = try? Self.makeContainer(
-            managedObjectModel: model,
-            storeURL: storeURL,
-            cloudKitContainerIdentifier: nil
-        ) {
-            container = localContainer
-            cloudSyncEnabled = false
+        let userWantsICloud = Self.readICloudPreference()
+
+        if userWantsICloud {
+            let cloudContainerIdentifier = Self.defaultCloudContainerIdentifier()
+            if let cloudContainer = try? Self.makeContainer(
+                managedObjectModel: model,
+                storeURL: storeURL,
+                cloudKitContainerIdentifier: cloudContainerIdentifier
+            ) {
+                container = cloudContainer
+                cloudSyncEnabled = true
+            } else if let localContainer = try? Self.makeContainer(
+                managedObjectModel: model,
+                storeURL: storeURL,
+                cloudKitContainerIdentifier: nil
+            ) {
+                container = localContainer
+                cloudSyncEnabled = false
+            } else {
+                fatalError("Unable to initialize persistent store")
+            }
         } else {
-            fatalError("Unable to initialize persistent store")
+            if let localContainer = try? Self.makeContainer(
+                managedObjectModel: model,
+                storeURL: storeURL,
+                cloudKitContainerIdentifier: nil
+            ) {
+                container = localContainer
+                cloudSyncEnabled = false
+            } else {
+                fatalError("Unable to initialize persistent store")
+            }
         }
 
         container.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
@@ -85,8 +100,16 @@ final class PersistenceController {
     }
 
     private static func defaultCloudContainerIdentifier() -> String {
-        let bundleIdentifier = Bundle.main.bundleIdentifier ?? "com.paste.ai.Paste"
+        let bundleIdentifier = Bundle.main.bundleIdentifier ?? "com.dorado.paste"
         return "iCloud.\(bundleIdentifier)"
+    }
+
+    private static func readICloudPreference() -> Bool {
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: "iCloudSyncEnabled") == nil {
+            return true
+        }
+        return defaults.bool(forKey: "iCloudSyncEnabled")
     }
 
     private static func makeManagedObjectModel() -> NSManagedObjectModel {

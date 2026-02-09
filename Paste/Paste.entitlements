@@ -4,7 +4,7 @@
 <dict>
 	<key>com.apple.developer.icloud-container-identifiers</key>
 	<array>
-		<string>iCloud.com.paste.ai.Paste</string>
+		<string>iCloud.com.dorado.paste</string>
 	</array>
 	<key>com.apple.developer.icloud-services</key>
 	<array>
@@ -12,10 +12,10 @@
 	</array>
 	<key>com.apple.developer.ubiquity-container-identifiers</key>
 	<array>
-		<string>iCloud.com.paste.ai.Paste</string>
+		<string>iCloud.com.dorado.paste</string>
 	</array>
 	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
-	<string>$(TeamIdentifierPrefix)com.paste.ai.Paste</string>
+	<string>$(TeamIdentifierPrefix)com.dorado.paste</string>
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
 	<key>com.apple.security.files.user-selected.read-only</key>
