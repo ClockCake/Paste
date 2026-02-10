@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - 语言枚举
 
-enum AppLanguage: String, CaseIterable, Identifiable {
+enum AppLanguage: String, CaseIterable, Identifiable, Sendable {
     case system
     case zh
     case en
@@ -28,7 +28,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
     }
 }
 
-enum ResolvedLanguage {
+enum ResolvedLanguage: Sendable {
     case zh, en
 }
 
@@ -49,6 +49,9 @@ struct L {
     }
     var iCloudOn: String { lang == .zh ? "iCloud 已开启" : "iCloud On" }
     var iCloudOff: String { lang == .zh ? "iCloud 已关闭（仅本地）" : "iCloud Off (local only)" }
+    var iCloudErrorTitle: String { lang == .zh ? "iCloud 同步错误" : "iCloud Sync Error" }
+    var iCloudErrorHint: String { lang == .zh ? "查看 iCloud 同步错误详情" : "Show iCloud sync error details" }
+    var iCloudErrorUnknown: String { lang == .zh ? "未知错误" : "Unknown error" }
 
     // 过滤器
     var filterAll: String { lang == .zh ? "全部" : "All" }
@@ -82,6 +85,19 @@ struct L {
     }
     var clickToCopy: String {
         lang == .zh ? "点击复制到剪贴板" : "Click to copy back to clipboard"
+    }
+
+    // 相对时间
+    var timeJustNow: String { lang == .zh ? "刚刚" : "Just now" }
+    func timeMinutesAgo(_ minutes: Int) -> String {
+        lang == .zh ? "\(minutes) 分钟前" : "\(minutes)m ago"
+    }
+    func timeHoursAgo(_ hours: Int) -> String {
+        lang == .zh ? "\(hours) 小时前" : "\(hours)h ago"
+    }
+    var timeYesterday: String { lang == .zh ? "昨天" : "Yesterday" }
+    func timeDaysAgo(_ days: Int) -> String {
+        lang == .zh ? "\(days) 天前" : "\(days)d ago"
     }
 
     // 设置相关

@@ -6,6 +6,7 @@ struct ContentView: View {
     @EnvironmentObject private var settings: SettingsManager
     @State private var showingClearAllAlert = false
     @State private var showingRestartAlert = false
+    @State private var showingCloudErrorAlert = false
 
     private var l: L { settings.l }
 
@@ -30,6 +31,11 @@ struct ContentView: View {
         } message: {
             Text(l.iCloudRestartHint)
         }
+        .alert(l.iCloudErrorTitle, isPresented: $showingCloudErrorAlert) {
+            Button("OK") {}
+        } message: {
+            Text(store.cloudSyncErrorMessage ?? l.iCloudErrorUnknown)
+        }
     }
 
     // MARK: - Header
@@ -45,6 +51,16 @@ struct ContentView: View {
                     Text(l.itemCount(store.totalItems))
                     Text(store.storageText)
                     Text(store.cloudSyncEnabled ? l.iCloudOn : l.iCloudOff)
+                    if store.cloudSyncErrorMessage != nil {
+                        Button {
+                            showingCloudErrorAlert = true
+                        } label: {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                        }
+                        .buttonStyle(.plain)
+                        .help(l.iCloudErrorHint)
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.tertiary)
@@ -134,24 +150,34 @@ struct ContentView: View {
     // MARK: - Filter
 
     private var filterBar: some View {
-        Picker(l.filterAll, selection: $store.filter) {
-            ForEach(ClipboardFilter.allCases) { filter in
-                Text(filter.localizedTitle(l)).tag(filter)
+        HStack {
+            Spacer()
+            Picker(selection: $store.filter) {
+                ForEach(ClipboardFilter.allCases) { filter in
+                    Text(filter.localizedTitle(l)).tag(filter)
+                }
+            } label: {
+                EmptyView()
             }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 360)
+            Spacer()
         }
-        .pickerStyle(.segmented)
-        .frame(maxWidth: 360)
     }
 
     // MARK: - Card Area
+
+    private let gridColumns = [
+        GridItem(.adaptive(minimum: 260, maximum: 280), spacing: 16)
+    ]
 
     private var cardArea: some View {
         Group {
             if store.cards.isEmpty {
                 emptyState
             } else {
-                ScrollView(.horizontal) {
-                    LazyHStack(alignment: .top, spacing: 12) {
+                ScrollView {
+                    LazyVGrid(columns: gridColumns, spacing: 16) {
                         ForEach(store.cards) { card in
                             ClipboardCardView(
                                 card: card,
@@ -216,25 +242,34 @@ private struct ClipboardCardView: View {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.secondary)
                         .opacity(isHovered ? 1 : 0.5)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help(l.delete)
             }
 
             content
+                .onTapGesture(perform: onCopy)
 
             Spacer(minLength: 4)
 
             HStack {
+                if let icon = appIcon(for: card.sourceBundleID) {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .frame(width: 14, height: 14)
+                }
                 Text(card.sourceAppName)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                 Spacer()
-                Text(card.createdAt, style: .time)
+                Text(relativeTimeString(for: card.createdAt))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
+            .onTapGesture(perform: onCopy)
         }
         .padding(14)
         .frame(width: 260, height: 220, alignment: .topLeading)
@@ -261,8 +296,6 @@ private struct ClipboardCardView: View {
         .onHover { hovering in
             isHovered = hovering
         }
-        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .onTapGesture(perform: onCopy)
         .help(l.clickToCopy)
     }
 
@@ -284,7 +317,44 @@ private struct ClipboardCardView: View {
             CachedThumbnailView(key: card.thumbnailKey)
                 .environmentObject(store)
                 .frame(maxWidth: .infinity, minHeight: 124, maxHeight: 132)
+                .clipped()
+                .contentShape(Rectangle())
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func appIcon(for bundleID: String) -> NSImage? {
+        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+            return nil
+        }
+        return NSWorkspace.shared.icon(forFile: appURL.path)
+    }
+
+    private func relativeTimeString(for date: Date) -> String {
+        let now = Date()
+        let interval = now.timeIntervalSince(date)
+
+        if interval < 60 {
+            return l.timeJustNow
+        } else if interval < 3600 {
+            let minutes = Int(interval / 60)
+            return l.timeMinutesAgo(minutes)
+        } else if interval < 86400 {
+            let hours = Int(interval / 3600)
+            return l.timeHoursAgo(hours)
+        } else {
+            let days = Int(interval / 86400)
+            if days == 1 {
+                return l.timeYesterday
+            } else if days < 7 {
+                return l.timeDaysAgo(days)
+            } else {
+                let formatter = DateFormatter()
+                formatter.dateFormat = l.lang == .zh ? "M月d日" : "MMM d"
+                return formatter.string(from: date)
+            }
         }
     }
 }
@@ -296,24 +366,43 @@ private struct CachedThumbnailView: View {
 
     let key: String?
     @State private var image: NSImage?
+    private let maxZoom: CGFloat = 1.12
 
     var body: some View {
-        Group {
-            if let image {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(.quaternary.opacity(0.3))
-                    .overlay {
-                        Image(systemName: "photo")
-                            .foregroundStyle(.secondary)
-                    }
+        GeometryReader { proxy in
+            ZStack {
+                if let image {
+                    let containerSize = proxy.size
+                    let containerAspect = containerSize.width / max(containerSize.height, 1)
+                    let imageSize = image.size
+                    let imageAspect = imageSize.width / max(imageSize.height, 1)
+                    let ratio = containerAspect / max(imageAspect, 0.0001)
+                    let zoomToFill = max(ratio, 1 / ratio)
+                    let zoom = min(maxZoom, zoomToFill)
+
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .scaleEffect(zoom)
+                        .frame(width: containerSize.width, height: containerSize.height)
+                        .clipped()
+                        .background(Color.secondary.opacity(0.12))
+                } else {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(.quaternary.opacity(0.3))
+                        .overlay {
+                            Image(systemName: "photo")
+                                .foregroundStyle(.secondary)
+                        }
+                }
             }
+            .frame(width: proxy.size.width, height: proxy.size.height)
         }
-        .task(id: key) {
+        .onAppear {
             image = store.thumbnail(forKey: key)
+        }
+        .onChange(of: key) { _, newKey in
+            image = store.thumbnail(forKey: newKey)
         }
     }
 }

@@ -14,4 +14,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         print("Remote notification registration failed: \(error.localizedDescription)")
         #endif
     }
+
+    func application(
+        _ application: NSApplication,
+        didReceiveRemoteNotification userInfo: [String: Any]
+    ) {
+        let anyUserInfo = userInfo.reduce(into: [AnyHashable: Any]()) { result, pair in
+            result[AnyHashable(pair.key)] = pair.value
+        }
+        _ = PersistenceController.shared.handleRemoteNotification(anyUserInfo)
+    }
 }

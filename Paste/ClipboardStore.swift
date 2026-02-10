@@ -7,7 +7,7 @@ import Foundation
 final class ClipboardStore: ObservableObject {
     @Published var filter: ClipboardFilter = .all {
         didSet {
-            reloadCards()
+            scheduleReload()
         }
     }
 
@@ -16,6 +16,7 @@ final class ClipboardStore: ObservableObject {
     @Published private(set) var totalStorageBytes: Int64 = 0
 
     let cloudSyncEnabled: Bool
+    let cloudSyncErrorMessage: String?
 
     private let maxItems = 500
     private let maxStorageBytes: Int64 = 512 * 1024 * 1024
@@ -27,12 +28,14 @@ final class ClipboardStore: ObservableObject {
     private var monitor: ClipboardMonitor?
     private var observers: [NSObjectProtocol] = []
     private var started = false
+    private var reloadScheduled = false
 
     init(persistence: PersistenceController) {
         self.persistence = persistence
         context = persistence.container.viewContext
         thumbnailCache = persistence.thumbnailCache
         cloudSyncEnabled = persistence.cloudSyncEnabled
+        cloudSyncErrorMessage = persistence.cloudSyncErrorMessage
 
         registerObservers()
         reloadCards()
@@ -95,7 +98,7 @@ final class ClipboardStore: ObservableObject {
         thumbnailCache.removeThumbnail(forKey: item.thumbnailKey)
         context.delete(item)
         saveContext()
-        reloadCards()
+        scheduleReload()
     }
 
     func clearAll() {
@@ -108,7 +111,7 @@ final class ClipboardStore: ObservableObject {
         }
 
         saveContext()
-        reloadCards()
+        scheduleReload()
     }
 
     private func registerObservers() {
@@ -119,7 +122,10 @@ final class ClipboardStore: ObservableObject {
             object: context,
             queue: .main
         ) { [weak self] _ in
-            self?.reloadCards()
+            // 延迟执行避免在视图更新期间发布变更
+            Task { @MainActor in
+                self?.scheduleReload()
+            }
         }
 
         let remoteObserver = center.addObserver(
@@ -127,7 +133,9 @@ final class ClipboardStore: ObservableObject {
             object: persistence.container.persistentStoreCoordinator,
             queue: .main
         ) { [weak self] _ in
-            self?.reloadCards()
+            Task { @MainActor in
+                self?.scheduleReload()
+            }
         }
 
         observers = [contextObserver, remoteObserver]
@@ -178,7 +186,7 @@ final class ClipboardStore: ObservableObject {
 
         saveContext()
         pruneIfNeeded()
-        reloadCards()
+        scheduleReload()
     }
 
     private func pruneIfNeeded() {
@@ -237,6 +245,16 @@ final class ClipboardStore: ObservableObject {
         if let allItems = try? context.fetch(totalsRequest) {
             totalItems = allItems.count
             totalStorageBytes = allItems.reduce(0) { $0 + $1.storageBytes }
+        }
+    }
+
+    private func scheduleReload() {
+        guard !reloadScheduled else { return }
+        reloadScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.reloadScheduled = false
+            self.reloadCards()
         }
     }
 

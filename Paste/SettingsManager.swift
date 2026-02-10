@@ -1,8 +1,8 @@
 import SwiftUI
-
+import Combine
 // MARK: - 外观模式
 
-enum AppearanceMode: String, CaseIterable, Identifiable {
+enum AppearanceMode: String, CaseIterable, Identifiable, Sendable {
     case system
     case light
     case dark
