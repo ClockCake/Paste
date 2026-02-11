@@ -40,7 +40,7 @@ struct L {
     // 应用标题
     var appTitle: String { "Paste" }
     var appSubtitle: String {
-        lang == .zh ? "自动捕获剪贴板，支持 iCloud 同步" : "Auto capture clipboard with iCloud sync"
+        lang == .zh ? "自动捕获剪贴板 · 支持 iCloud 同步" : "Auto capture clipboard with iCloud sync"
     }
 
     // 统计信息
@@ -55,6 +55,7 @@ struct L {
 
     // 过滤器
     var filterAll: String { lang == .zh ? "全部" : "All" }
+    var filterFavorites: String { lang == .zh ? "收藏" : "Favorites" }
     var filterText: String { lang == .zh ? "文本" : "Text" }
     var filterURL: String { "URL" }
     var filterImage: String { lang == .zh ? "图片" : "Image" }
@@ -64,11 +65,19 @@ struct L {
     var kindURL: String { "URL" }
     var kindImage: String { lang == .zh ? "图片" : "Image" }
 
+    // 内容元信息
+    func characterCount(_ count: Int) -> String {
+        lang == .zh ? "\(count) 字符" : "\(count) chars"
+    }
+
     // 操作按钮
+    var copy: String { lang == .zh ? "复制" : "Copy" }
     var clearAll: String { lang == .zh ? "清除全部" : "Clear All" }
     var cancel: String { lang == .zh ? "取消" : "Cancel" }
     var clear: String { lang == .zh ? "清除" : "Clear" }
     var delete: String { lang == .zh ? "删除" : "Delete" }
+    var favorite: String { lang == .zh ? "收藏" : "Favorite" }
+    var unfavorite: String { lang == .zh ? "取消收藏" : "Unfavorite" }
 
     // 提示文字
     var clearAllConfirmTitle: String {
@@ -84,7 +93,10 @@ struct L {
         lang == .zh ? "复制文本 / URL / 图片即可开始" : "Copy Text / URL / Image to start."
     }
     var clickToCopy: String {
-        lang == .zh ? "点击复制到剪贴板" : "Click to copy back to clipboard"
+        lang == .zh ? "双击复制到剪贴板" : "Double-click to copy"
+    }
+    var doubleClickToPaste: String {
+        lang == .zh ? "双击复制并自动粘贴" : "Double-click to copy and paste"
     }
 
     // 相对时间
@@ -104,10 +116,62 @@ struct L {
     var appearance: String { lang == .zh ? "外观" : "Appearance" }
     var language: String { lang == .zh ? "语言" : "Language" }
     var iCloudSync: String { lang == .zh ? "iCloud 同步" : "iCloud Sync" }
+    var autoPasteOnDoubleClick: String {
+        lang == .zh ? "双击自动粘贴" : "Auto paste on double-click"
+    }
+    var autoPasteOnDoubleClickHint: String {
+        lang == .zh
+            ? "双击后自动粘贴到当前光标处（需开启\u{300C}辅助功能\u{300D}权限）"
+            : "Auto paste to the focused field after double-click (requires Accessibility permission)"
+    }
+    var accessibilityPermissionTitle: String {
+        lang == .zh ? "需要辅助功能权限" : "Accessibility Permission Required"
+    }
+    var accessibilityPermissionMessage: String {
+        lang == .zh
+            ? "自动粘贴功能需要\u{300C}辅助功能\u{300D}权限来模拟键盘输入。请在系统设置中授权本应用。"
+            : "Auto paste needs Accessibility permission to simulate keyboard input. Please grant access in System Settings."
+    }
+    var openSystemSettings: String {
+        lang == .zh ? "打开系统设置" : "Open System Settings"
+    }
     var iCloudRestartHint: String {
         lang == .zh ? "切换后需要重启应用生效" : "Restart app to apply changes"
     }
     var appearanceSystem: String { lang == .zh ? "跟随系统" : "System" }
     var appearanceLight: String { lang == .zh ? "浅色" : "Light" }
     var appearanceDark: String { lang == .zh ? "深色" : "Dark" }
+
+    // 搜索
+    var search: String { lang == .zh ? "搜索" : "Search" }
+    var searchPlaceholder: String { lang == .zh ? "搜索剪贴板内容…" : "Search clipboard..." }
+    var noSearchResults: String { lang == .zh ? "无搜索结果" : "No results found" }
+    var noSearchResultsHint: String { lang == .zh ? "尝试其他关键词" : "Try different keywords" }
+
+    // 时间筛选
+    var timeFilterAll: String { lang == .zh ? "全部时间" : "All Time" }
+    var timeFilterToday: String { lang == .zh ? "今天" : "Today" }
+    var timeFilter7Days: String { lang == .zh ? "最近 7 天" : "Last 7 Days" }
+    var timeFilter30Days: String { lang == .zh ? "最近 30 天" : "Last 30 Days" }
+
+    // 快捷键设置
+    var hotkeyTitle: String { lang == .zh ? "全局快捷键" : "Global Hotkey" }
+
+    // 智能内容识别
+    var smartColor: String { lang == .zh ? "颜色" : "Color" }
+    var smartPhone: String { lang == .zh ? "电话号码" : "Phone" }
+    var smartEmail: String { lang == .zh ? "邮箱" : "Email" }
+    var hotkeyCurrentLabel: String { lang == .zh ? "当前快捷键" : "Current Hotkey" }
+    var hotkeyNotSet: String { lang == .zh ? "未设置" : "Not Set" }
+    var hotkeyRecord: String { lang == .zh ? "录制快捷键" : "Record Hotkey" }
+    var hotkeyRecording: String { lang == .zh ? "录制中…" : "Recording…" }
+    var hotkeyClear: String { lang == .zh ? "清除" : "Clear" }
+    var hotkeyHint: String { lang == .zh ? "设置后可在后台通过快捷键唤起窗口" : "Use hotkey to show window from background" }
+    var hotkeyRecordingHint: String { lang == .zh ? "请按下你想要的组合键（需包含修饰键）" : "Press your desired key combination (with modifier)" }
+    var hotkeySettings: String { lang == .zh ? "快捷键" : "Hotkey" }
+
+    // 状态栏菜单
+    var openWindow: String { lang == .zh ? "打开 Paste" : "Open Paste" }
+    var showWindow: String { lang == .zh ? "显示窗口" : "Show Window" }
+    var quit: String { lang == .zh ? "退出" : "Quit" }
 }

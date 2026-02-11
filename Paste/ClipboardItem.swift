@@ -39,6 +39,7 @@ enum ClipboardEntryKind: String, CaseIterable {
 
 enum ClipboardFilter: String, CaseIterable, Identifiable {
     case all
+    case favorites
     case text
     case url
     case image
@@ -49,6 +50,8 @@ enum ClipboardFilter: String, CaseIterable, Identifiable {
         switch self {
         case .all:
             return "All"
+        case .favorites:
+            return "Favorites"
         case .text:
             return "Text"
         case .url:
@@ -60,7 +63,7 @@ enum ClipboardFilter: String, CaseIterable, Identifiable {
 
     var kind: ClipboardEntryKind? {
         switch self {
-        case .all:
+        case .all, .favorites:
             return nil
         case .text:
             return .text
@@ -71,12 +74,51 @@ enum ClipboardFilter: String, CaseIterable, Identifiable {
         }
     }
 
+    var isFavoritesFilter: Bool {
+        self == .favorites
+    }
+
     func localizedTitle(_ l: L) -> String {
         switch self {
         case .all: return l.filterAll
+        case .favorites: return l.filterFavorites
         case .text: return l.filterText
         case .url: return l.filterURL
         case .image: return l.filterImage
+        }
+    }
+}
+
+enum TimeFilter: String, CaseIterable, Identifiable {
+    case all
+    case today
+    case sevenDays
+    case thirtyDays
+
+    var id: String { rawValue }
+
+    /// 返回筛选起始日期，nil 表示不限
+    var startDate: Date? {
+        let cal = Calendar.current
+        let now = Date()
+        switch self {
+        case .all:
+            return nil
+        case .today:
+            return cal.startOfDay(for: now)
+        case .sevenDays:
+            return cal.date(byAdding: .day, value: -7, to: now)
+        case .thirtyDays:
+            return cal.date(byAdding: .day, value: -30, to: now)
+        }
+    }
+
+    func localizedTitle(_ l: L) -> String {
+        switch self {
+        case .all: return l.timeFilterAll
+        case .today: return l.timeFilterToday
+        case .sevenDays: return l.timeFilter7Days
+        case .thirtyDays: return l.timeFilter30Days
         }
     }
 }
@@ -100,6 +142,7 @@ public final class ClipboardItem: NSManagedObject {
     @NSManaged public var payloadBytes: Int64
     @NSManaged public var thumbnailBytes: Int64
     @NSManaged public var thumbnailKey: String?
+    @NSManaged public var isFavorite: Bool
 }
 
 extension ClipboardItem: Identifiable {}
@@ -134,4 +177,13 @@ struct ClipboardCard: Identifiable {
     let sourceBundleID: String
     let previewText: String
     let thumbnailKey: String?
+    let isFavorite: Bool
+
+    // 内容元信息
+    let characterCount: Int
+    let imageWidth: Int?
+    let imageHeight: Int?
+
+    // 智能内容识别
+    let smartContentType: SmartContentType
 }

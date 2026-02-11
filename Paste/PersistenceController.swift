@@ -267,6 +267,7 @@ final class PersistenceController {
         let payloadBytes = attribute(name: "payloadBytes", type: .integer64AttributeType, optional: false, defaultValue: 0)
         let thumbnailBytes = attribute(name: "thumbnailBytes", type: .integer64AttributeType, optional: false, defaultValue: 0)
         let thumbnailKey = attribute(name: "thumbnailKey", type: .stringAttributeType, optional: true)
+        let isFavorite = attribute(name: "isFavorite", type: .booleanAttributeType, optional: false, defaultValue: false)
 
         entity.properties = [
             id,
@@ -281,7 +282,8 @@ final class PersistenceController {
             sourceBundleID,
             payloadBytes,
             thumbnailBytes,
-            thumbnailKey
+            thumbnailKey,
+            isFavorite
         ]
         // CloudKit 不支持唯一约束，改用代码层面去重
         // entity.uniquenessConstraints = [["contentHash"]]

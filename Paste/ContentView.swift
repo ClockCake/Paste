@@ -7,6 +7,13 @@ struct ContentView: View {
     @State private var showingClearAllAlert = false
     @State private var showingRestartAlert = false
     @State private var showingCloudErrorAlert = false
+    @State private var selectedFilter: ClipboardFilter = .all
+    @State private var selectedTimeFilter: TimeFilter = .all
+    @State private var isSearchExpanded = false
+    @State private var searchText = ""
+    @State private var showingHotkeySettings = false
+    @State private var showingAccessibilityAlert = false
+    @FocusState private var isSearchFocused: Bool
 
     private var l: L { settings.l }
 
@@ -35,6 +42,42 @@ struct ContentView: View {
             Button("OK") {}
         } message: {
             Text(store.cloudSyncErrorMessage ?? l.iCloudErrorUnknown)
+        }
+        .alert(l.accessibilityPermissionTitle, isPresented: $showingAccessibilityAlert) {
+            Button(l.openSystemSettings) {
+                AutoPasteManager.shared.openAccessibilitySettings()
+            }
+            Button(l.cancel, role: .cancel) {
+                settings.autoPasteOnDoubleClick = false
+            }
+        } message: {
+            Text(l.accessibilityPermissionMessage)
+        }
+        .task {
+            NSApp.appearance = settings.appearanceMode.nsAppearance
+            selectedFilter = store.currentFilter
+            selectedTimeFilter = store.currentTimeFilter
+            if settings.autoPasteOnDoubleClick {
+                ensureAccessibilityPermission()
+            }
+        }
+        .onChange(of: settings.appearanceMode) { newValue in
+            NSApp.appearance = newValue.nsAppearance
+        }
+        .onChange(of: selectedFilter) { newValue in
+            DispatchQueue.main.async {
+                store.updateFilter(newValue)
+            }
+        }
+        .onChange(of: searchText) { newValue in
+            DispatchQueue.main.async {
+                store.updateSearch(newValue)
+            }
+        }
+        .onChange(of: selectedTimeFilter) { newValue in
+            DispatchQueue.main.async {
+                store.updateTimeFilter(newValue)
+            }
         }
     }
 
@@ -134,8 +177,42 @@ struct ContentView: View {
             .toggleStyle(.switch)
             .controlSize(.small)
             .help(l.iCloudSync)
-            .onChange(of: settings.iCloudSyncPreference) { _, _ in
+            .onChange(of: settings.iCloudSyncPreference) { _ in
                 showingRestartAlert = true
+            }
+
+            Divider()
+                .frame(height: 18)
+
+            // 快捷键设置
+            Button {
+                showingHotkeySettings.toggle()
+            } label: {
+                Image(systemName: "keyboard")
+                    .font(.title3)
+                    .symbolRenderingMode(.hierarchical)
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .help(l.hotkeySettings)
+            .popover(isPresented: $showingHotkeySettings, arrowEdge: .bottom) {
+                HotkeySettingsView()
+                    .environmentObject(settings)
+            }
+
+            Toggle(isOn: $settings.autoPasteOnDoubleClick) {
+                Label(l.autoPasteOnDoubleClick, systemImage: "command")
+                    .labelStyle(.iconOnly)
+                    .font(.title3)
+                    .symbolRenderingMode(.hierarchical)
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .help(l.autoPasteOnDoubleClickHint)
+            .onChange(of: settings.autoPasteOnDoubleClick) { newValue in
+                if newValue {
+                    ensureAccessibilityPermission()
+                }
             }
 
             Button(role: .destructive) {
@@ -150,9 +227,9 @@ struct ContentView: View {
     // MARK: - Filter
 
     private var filterBar: some View {
-        HStack {
+        HStack(spacing: 12) {
             Spacer()
-            Picker(selection: $store.filter) {
+            Picker(selection: $selectedFilter) {
                 ForEach(ClipboardFilter.allCases) { filter in
                     Text(filter.localizedTitle(l)).tag(filter)
                 }
@@ -162,6 +239,82 @@ struct ContentView: View {
             .pickerStyle(.segmented)
             .frame(maxWidth: 360)
             Spacer()
+
+            // 时间筛选和搜索
+            HStack(spacing: 8) {
+                Menu {
+                    ForEach(TimeFilter.allCases) { tf in
+                        Button {
+                            selectedTimeFilter = tf
+                        } label: {
+                            if selectedTimeFilter == tf {
+                                Label(tf.localizedTitle(l), systemImage: "checkmark")
+                            } else {
+                                Text(tf.localizedTitle(l))
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "calendar")
+                        if selectedTimeFilter != .all {
+                            Text(selectedTimeFilter.localizedTitle(l))
+                                .font(.caption)
+                        }
+                    }
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(selectedTimeFilter != .all ? .primary : .secondary)
+                    .frame(height: 28)
+                    .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+
+                if isSearchExpanded {
+                    TextField(l.searchPlaceholder, text: $searchText)
+                        .textFieldStyle(.plain)
+                        .font(.body)
+                        .focused($isSearchFocused)
+                        .frame(width: 180)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 10)
+                        .background {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(.quaternary.opacity(0.5))
+                        }
+                        .transition(.asymmetric(
+                            insertion: .move(edge: .trailing).combined(with: .opacity),
+                            removal: .move(edge: .trailing).combined(with: .opacity)
+                        ))
+                        .onExitCommand {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                isSearchExpanded = false
+                                searchText = ""
+                                isSearchFocused = false
+                            }
+                        }
+                }
+
+                Button {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                        isSearchExpanded.toggle()
+                        if isSearchExpanded {
+                            isSearchFocused = true
+                        } else {
+                            searchText = ""
+                            isSearchFocused = false
+                        }
+                    }
+                } label: {
+                    Image(systemName: isSearchExpanded ? "xmark.circle.fill" : "magnifyingglass")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(isSearchExpanded ? .secondary : .primary)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(l.search)
+            }
         }
     }
 
@@ -174,7 +327,11 @@ struct ContentView: View {
     private var cardArea: some View {
         Group {
             if store.cards.isEmpty {
-                emptyState
+                if !searchText.isEmpty {
+                    noSearchResultsState
+                } else {
+                    emptyState
+                }
             } else {
                 ScrollView {
                     LazyVGrid(columns: gridColumns, spacing: 16) {
@@ -182,7 +339,9 @@ struct ContentView: View {
                             ClipboardCardView(
                                 card: card,
                                 onCopy: { store.copy(card) },
-                                onDelete: { store.delete(card) }
+                                onDelete: { store.delete(card) },
+                                onToggleFavorite: { store.toggleFavorite(card) },
+                                onRequestAccessibility: { ensureAccessibilityPermission() }
                             )
                             .environmentObject(store)
                             .environmentObject(settings)
@@ -216,6 +375,60 @@ struct ContentView: View {
                 .fill(.quaternary.opacity(0.2))
         }
     }
+
+    private var noSearchResultsState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 40, weight: .light))
+                .foregroundStyle(.secondary)
+            Text(l.noSearchResults)
+                .font(.title3.weight(.medium))
+                .foregroundStyle(.secondary)
+            Text(l.noSearchResultsHint)
+                .font(.callout)
+                .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.quaternary.opacity(0.2))
+        }
+    }
+
+    // MARK: - 权限提示
+
+    private func ensureAccessibilityPermission() {
+        guard !AutoPasteManager.shared.isAccessibilityGranted else { return }
+        AutoPasteManager.shared.requestAccessibilityIfNeeded()
+        showingAccessibilityAlert = true
+    }
+}
+
+// MARK: - 声音管理器
+
+private enum SoundManager {
+    private static let pasteSoundName = "Copy"
+    private static let pasteSoundExtension = "aiff"
+
+    private static var copySound: NSSound? = {
+        if
+            let url = Bundle.main.url(forResource: pasteSoundName, withExtension: pasteSoundExtension)
+            ?? Bundle.main.url(forResource: pasteSoundName, withExtension: pasteSoundExtension, subdirectory: "Resources")
+        {
+            return NSSound(contentsOf: url, byReference: true)
+        }
+
+        let pasteAppURL = URL(fileURLWithPath: "/Applications/Paste.app/Contents/Resources/Copy.aiff")
+        return NSSound(contentsOf: pasteAppURL, byReference: true)
+    }()
+
+    static func playCopySound() {
+        guard let sound = copySound else { return }
+        if sound.isPlaying {
+            sound.stop()
+        }
+        sound.play()
+    }
 }
 
 // MARK: - Card View
@@ -228,51 +441,95 @@ private struct ClipboardCardView: View {
     let card: ClipboardCard
     let onCopy: () -> Void
     let onDelete: () -> Void
+    let onToggleFavorite: () -> Void
+    let onRequestAccessibility: () -> Void
 
     private var l: L { settings.l }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label(card.kind.localizedTitle(l), systemImage: card.kind.symbolName)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button(role: .destructive, action: onDelete) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                        .opacity(isHovered ? 1 : 0.5)
-                        .frame(width: 24, height: 24)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(l.delete)
-            }
-
-            content
-                .onTapGesture(perform: onCopy)
-
-            Spacer(minLength: 4)
-
+            // 顶部：左边图标+程序名，右边删除按钮
             HStack {
                 if let icon = appIcon(for: card.sourceBundleID) {
                     Image(nsImage: icon)
                         .resizable()
-                        .frame(width: 14, height: 14)
+                        .frame(width: 28, height: 28)
+                } else {
+                    Image(systemName: card.kind.symbolName)
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
                 }
                 Text(card.sourceAppName)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
+                Spacer()
+                HStack(spacing: 6) {
+                    if card.isFavorite {
+                        Image(systemName: "star.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.yellow)
+                    }
+                    Button(role: .destructive, action: onDelete) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 18))
+                            .foregroundStyle(.secondary)
+                            .opacity(isHovered ? 1 : 0.5)
+                    }
+                    .buttonStyle(.plain)
+                    .help(l.delete)
+                }
+            }
+
+            content
+
+            Spacer(minLength: 4)
+
+            // 底部：左边字符数/尺寸，右边时间
+            HStack {
+                Text(contentMetaText)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
                 Spacer()
                 Text(relativeTimeString(for: card.createdAt))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
-            .onTapGesture(perform: onCopy)
         }
         .padding(14)
         .frame(width: 260, height: 220, alignment: .topLeading)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            onCopy()
+            SoundManager.playCopySound()
+            if settings.autoPasteOnDoubleClick {
+                if !AutoPasteManager.shared.performAutoPaste() {
+                    onRequestAccessibility()
+                }
+            }
+        }
+        .contextMenu {
+            Button {
+                onCopy()
+                SoundManager.playCopySound()
+            } label: {
+                Label(l.copy, systemImage: "doc.on.doc")
+            }
+
+            Button(action: onToggleFavorite) {
+                Label(
+                    card.isFavorite ? l.unfavorite : l.favorite,
+                    systemImage: card.isFavorite ? "star.slash" : "star"
+                )
+            }
+
+            Divider()
+
+            Button(role: .destructive, action: onDelete) {
+                Label(l.delete, systemImage: "trash")
+            }
+        }
         .background {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(.background)
@@ -296,23 +553,19 @@ private struct ClipboardCardView: View {
         .onHover { hovering in
             isHovered = hovering
         }
-        .help(l.clickToCopy)
+        .help(settings.autoPasteOnDoubleClick ? l.doubleClickToPaste : l.clickToCopy)
     }
 
     @ViewBuilder
     private var content: some View {
         switch card.kind {
         case .text:
-            Text(card.previewText)
-                .font(.body)
-                .lineLimit(6)
-                .textSelection(.enabled)
+            smartContentView
         case .url:
             Text(card.previewText)
                 .font(.body)
                 .lineLimit(4)
                 .foregroundStyle(.blue)
-                .textSelection(.enabled)
         case .image:
             CachedThumbnailView(key: card.thumbnailKey)
                 .environmentObject(store)
@@ -323,7 +576,112 @@ private struct ClipboardCardView: View {
         }
     }
 
+    /// 根据智能识别类型渲染不同的文本内容预览
+    @ViewBuilder
+    private var smartContentView: some View {
+        switch card.smartContentType {
+        case .color(let r, let g, let b, let a):
+            colorPreview(r: r, g: g, b: b, a: a)
+        case .phoneNumber:
+            iconLabelPreview(
+                icon: "phone.fill",
+                iconColor: .green,
+                text: card.previewText
+            )
+        case .email:
+            iconLabelPreview(
+                icon: "envelope.fill",
+                iconColor: .blue,
+                text: card.previewText
+            )
+        case .none:
+            Text(card.previewText)
+                .font(.body)
+                .lineLimit(6)
+        }
+    }
+
+    /// 颜色预览：大色块 + 底部颜色代码
+    private func colorPreview(r: Double, g: Double, b: Double, a: Double) -> some View {
+        let color = Color(red: r, green: g, blue: b, opacity: a)
+        // 计算亮度，决定文字颜色（深色背景用白字，浅色背景用黑字）
+        let luminance = 0.299 * r + 0.587 * g + 0.114 * b
+        let textColor: Color = luminance > 0.5 ? .black : .white
+
+        return RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(color)
+            .frame(maxWidth: .infinity, minHeight: 100, maxHeight: 132)
+            .overlay(alignment: .bottom) {
+                // 棋盘格背景（用于透明色预览）
+                if a < 1 {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(
+                            .linearGradient(
+                                colors: [.white.opacity(0.3), .clear],
+                                startPoint: .bottom,
+                                endPoint: .top
+                            )
+                        )
+                }
+            }
+            .overlay(alignment: .center) {
+                VStack(spacing: 6) {
+                    // 显示颜色代码
+                    Text(card.previewText)
+                        .font(.system(.title3, design: .monospaced).weight(.semibold))
+                        .foregroundStyle(textColor.opacity(0.9))
+
+                    // 显示 RGB 值
+                    Text("R:\(Int(r * 255)) G:\(Int(g * 255)) B:\(Int(b * 255))")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(textColor.opacity(0.6))
+                }
+                .padding(.horizontal, 8)
+            }
+    }
+
+    /// 带图标的内容预览（电话、邮箱等）
+    private func iconLabelPreview(icon: String, iconColor: Color, text: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 32))
+                .foregroundStyle(iconColor.opacity(0.8))
+                .frame(maxWidth: .infinity, alignment: .center)
+
+            Text(text)
+                .font(.system(.body, design: .monospaced))
+                .lineLimit(3)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+        }
+        .frame(maxWidth: .infinity, minHeight: 80)
+    }
+
     // MARK: - Helpers
+
+    /// 内容元信息：字符数或图片尺寸或智能类型
+    private var contentMetaText: String {
+        switch card.kind {
+        case .text, .url:
+            let smartLabel: String? = {
+                switch card.smartContentType {
+                case .color: return l.smartColor
+                case .phoneNumber: return l.smartPhone
+                case .email: return l.smartEmail
+                case .none: return nil
+                }
+            }()
+            if let label = smartLabel {
+                return "\(label) · \(l.characterCount(card.characterCount))"
+            }
+            return l.characterCount(card.characterCount)
+        case .image:
+            if let w = card.imageWidth, let h = card.imageHeight {
+                return "\(w) × \(h)"
+            }
+            return l.kindImage
+        }
+    }
 
     private func appIcon(for bundleID: String) -> NSImage? {
         guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
@@ -401,7 +759,7 @@ private struct CachedThumbnailView: View {
         .onAppear {
             image = store.thumbnail(forKey: key)
         }
-        .onChange(of: key) { _, newKey in
+        .onChange(of: key) { newKey in
             image = store.thumbnail(forKey: newKey)
         }
     }

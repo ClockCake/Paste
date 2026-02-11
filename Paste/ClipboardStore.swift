@@ -5,11 +5,9 @@ import Foundation
 
 @MainActor
 final class ClipboardStore: ObservableObject {
-    @Published var filter: ClipboardFilter = .all {
-        didSet {
-            scheduleReload()
-        }
-    }
+    private var filter: ClipboardFilter = .all
+    private var searchText: String = ""
+    private var timeFilter: TimeFilter = .all
 
     @Published private(set) var cards: [ClipboardCard] = []
     @Published private(set) var totalItems: Int = 0
@@ -18,8 +16,7 @@ final class ClipboardStore: ObservableObject {
     let cloudSyncEnabled: Bool
     let cloudSyncErrorMessage: String?
 
-    private let maxItems = 500
-    private let maxStorageBytes: Int64 = 512 * 1024 * 1024
+    private let maxStorageBytes: Int64 = 2 * 1024 * 1024 * 1024
 
     private let persistence: PersistenceController
     private let context: NSManagedObjectContext
@@ -45,6 +42,37 @@ final class ClipboardStore: ObservableObject {
         ByteCountFormatter.string(fromByteCount: totalStorageBytes, countStyle: .file)
     }
 
+    var currentFilter: ClipboardFilter {
+        filter
+    }
+
+    var currentSearchText: String {
+        searchText
+    }
+
+    var currentTimeFilter: TimeFilter {
+        timeFilter
+    }
+
+    func updateFilter(_ newFilter: ClipboardFilter) {
+        guard filter != newFilter else { return }
+        filter = newFilter
+        scheduleReload()
+    }
+
+    func updateSearch(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard searchText != trimmed else { return }
+        searchText = trimmed
+        scheduleReload()
+    }
+
+    func updateTimeFilter(_ newFilter: TimeFilter) {
+        guard timeFilter != newFilter else { return }
+        timeFilter = newFilter
+        scheduleReload()
+    }
+
     func start() {
         guard !started else { return }
         started = true
@@ -63,7 +91,24 @@ final class ClipboardStore: ObservableObject {
     }
 
     func thumbnail(forKey key: String?) -> NSImage? {
-        thumbnailCache.image(forKey: key)
+        // 先尝试从缓存读取
+        if let image = thumbnailCache.image(forKey: key) {
+            return image
+        }
+        // 缓存缺失时，从 CoreData 的 imageData 重新生成缩略图
+        guard let key else { return nil }
+        let request = ClipboardItem.fetchRequest()
+        request.fetchLimit = 1
+        request.predicate = NSPredicate(format: "thumbnailKey == %@", key)
+        guard
+            let item = try? context.fetch(request).first,
+            let imageData = item.imageData,
+            let thumbData = ImageCoder.thumbnailJPEGData(from: imageData)
+        else {
+            return nil
+        }
+        thumbnailCache.storeThumbnail(thumbData, forKey: key)
+        return thumbnailCache.image(forKey: key)
     }
 
     func copy(_ card: ClipboardCard) {
@@ -97,6 +142,13 @@ final class ClipboardStore: ObservableObject {
 
         thumbnailCache.removeThumbnail(forKey: item.thumbnailKey)
         context.delete(item)
+        saveContext()
+        scheduleReload()
+    }
+
+    func toggleFavorite(_ card: ClipboardCard) {
+        guard let item = fetchItem(id: card.id) else { return }
+        item.isFavorite.toggle()
         saveContext()
         scheduleReload()
     }
@@ -197,12 +249,10 @@ final class ClipboardStore: ObservableObject {
             return
         }
 
-        var currentCount = allItems.count
         var currentBytes = allItems.reduce(0) { $0 + $1.storageBytes }
         var didDelete = false
 
-        for item in allItems where currentCount > maxItems || currentBytes > maxStorageBytes {
-            currentCount -= 1
+        for item in allItems where currentBytes > maxStorageBytes {
             currentBytes -= item.storageBytes
             thumbnailCache.removeThumbnail(forKey: item.thumbnailKey)
             context.delete(item)
@@ -218,8 +268,33 @@ final class ClipboardStore: ObservableObject {
         let request = ClipboardItem.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: false)]
 
+        // 构建筛选条件
+        var predicates: [NSPredicate] = []
+
+        if filter.isFavoritesFilter {
+            predicates.append(NSPredicate(format: "isFavorite == true"))
+        }
+
         if let kind = filter.kind {
-            request.predicate = NSPredicate(format: "kindRaw == %@", kind.rawValue)
+            predicates.append(NSPredicate(format: "kindRaw == %@", kind.rawValue))
+        }
+
+        // 搜索条件：匹配文本内容或 URL
+        if !searchText.isEmpty {
+            let searchPredicate = NSPredicate(
+                format: "textContent CONTAINS[cd] %@ OR urlString CONTAINS[cd] %@",
+                searchText, searchText
+            )
+            predicates.append(searchPredicate)
+        }
+
+        // 时间筛选
+        if let startDate = timeFilter.startDate {
+            predicates.append(NSPredicate(format: "createdAt >= %@", startDate as NSDate))
+        }
+
+        if !predicates.isEmpty {
+            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
         }
 
         guard let fetched = try? context.fetch(request) else {
@@ -229,15 +304,33 @@ final class ClipboardStore: ObservableObject {
             return
         }
 
-        cards = fetched.map {
-            ClipboardCard(
-                id: $0.id,
-                kind: $0.kind,
-                createdAt: $0.createdAt,
-                sourceAppName: $0.sourceAppName ?? "Unknown",
-                sourceBundleID: $0.sourceBundleID ?? "unknown.bundle",
-                previewText: $0.previewText,
-                thumbnailKey: $0.thumbnailKey
+        cards = fetched.map { item in
+            // 计算图片尺寸
+            var imageWidth: Int?
+            var imageHeight: Int?
+            if item.kind == .image, let imageData = item.imageData, let image = NSImage(data: imageData) {
+                imageWidth = Int(image.size.width)
+                imageHeight = Int(image.size.height)
+            }
+
+            // 智能内容识别（仅文本类型）
+            let smartType: SmartContentType = (item.kind == .text)
+                ? SmartContentDetector.detect(item.previewText)
+                : .none
+
+            return ClipboardCard(
+                id: item.id,
+                kind: item.kind,
+                createdAt: item.createdAt,
+                sourceAppName: item.sourceAppName ?? "Unknown",
+                sourceBundleID: item.sourceBundleID ?? "unknown.bundle",
+                previewText: item.previewText,
+                thumbnailKey: item.thumbnailKey,
+                isFavorite: item.isFavorite,
+                characterCount: item.previewText.count,
+                imageWidth: imageWidth,
+                imageHeight: imageHeight,
+                smartContentType: smartType
             )
         }
 
@@ -251,6 +344,7 @@ final class ClipboardStore: ObservableObject {
     private func scheduleReload() {
         guard !reloadScheduled else { return }
         reloadScheduled = true
+        // 使用下一次 RunLoop，避免视图更新期间发布变更
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.reloadScheduled = false
