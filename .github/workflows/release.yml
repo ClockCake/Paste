@@ -1,0 +1,45 @@
+name: 构建并发布
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 选择 Xcode 版本
+        run: sudo xcode-select -s /Applications/Xcode_16.app
+
+      - name: 构建应用
+        run: |
+          xcodebuild -project Paste.xcodeproj \
+            -scheme Paste \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: 打包 DMG
+        run: |
+          APP_PATH=$(find build -name "Paste.app" -type d | head -1)
+          mkdir -p build/dmg
+          cp -R "$APP_PATH" build/dmg/
+          ln -s /Applications build/dmg/Applications
+          hdiutil create -volname "Paste" \
+            -srcfolder build/dmg \
+            -ov -format UDZO \
+            build/Paste.dmg
+
+      - name: 创建 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/Paste.dmg
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
