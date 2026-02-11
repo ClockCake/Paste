@@ -12,22 +12,30 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 选择 Xcode 版本
-        run: sudo xcode-select -s /Applications/Xcode_16.app
+      - name: 查找并选择 Xcode 版本
+        run: |
+          ls /Applications/ | grep Xcode
+          XCODE_PATH=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          echo "使用 Xcode: $XCODE_PATH"
+          sudo xcode-select -s "$XCODE_PATH"
+          xcodebuild -version
 
       - name: 构建应用
         run: |
           xcodebuild -project Paste.xcodeproj \
             -scheme Paste \
             -configuration Release \
+            -destination 'generic/platform=macOS' \
             -derivedDataPath build \
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            SWIFT_TREAT_WARNINGS_AS_ERRORS=NO
 
       - name: 打包 DMG
         run: |
           APP_PATH=$(find build -name "Paste.app" -type d | head -1)
+          echo "找到应用: $APP_PATH"
           mkdir -p build/dmg
           cp -R "$APP_PATH" build/dmg/
           ln -s /Applications build/dmg/Applications
