@@ -95,6 +95,14 @@ final class PersistenceController {
         let containerIdentifier = Self.defaultCloudContainerIdentifier()
         Self.logger.info("CloudKit 容器 ID: \(containerIdentifier)")
 
+        // ubiquityIdentityToken 为 nil 表示 iCloud 不可用
+        // （未登录、受限或应用缺少签名权限），此时不能调用 CKContainer API，否则会 SIGTRAP 崩溃
+        guard FileManager.default.ubiquityIdentityToken != nil else {
+            Self.logger.info("iCloud 账户状态: ❌ iCloud 不可用（未登录或应用缺少签名权限）")
+            Self.logger.info("=====================================")
+            return
+        }
+
         // 检查 iCloud 账户状态
         Task {
             await self.checkCloudKitAccountStatus()

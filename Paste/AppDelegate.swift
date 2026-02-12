@@ -49,7 +49,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if !flag {
             showWindowFromBackground()
         }
-        return true
+        // 返回 false：阻止 WindowGroup 自动创建新窗口（否则会出现 2 个主窗口）
+        return false
     }
 
     // MARK: - 窗口管理
