@@ -406,7 +406,7 @@ struct ContentView: View {
 
 // MARK: - 声音管理器
 
-private enum SoundManager {
+enum SoundManager {
     private static let pasteSoundName = "Copy"
     private static let pasteSoundExtension = "aiff"
 

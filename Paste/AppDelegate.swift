@@ -275,10 +275,10 @@ final class AutoPasteManager {
         if #available(macOS 14.0, *) {
             NSApp.yieldActivation(to: target)
         }
-        print("[AutoPaste] 已隐藏并移交焦点，0.5s 后发送 Cmd+V")
+        print("[AutoPaste] 已隐藏并移交焦点，0.15s 后发送 Cmd+V")
 
-        // 等待目标应用完全获得键盘焦点后再发送 Cmd+V
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+        // 等待目标应用完全获得键盘焦点后再发送 Cmd+V（150ms 已足够）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             Self.postPasteShortcut()
             print("[AutoPaste] Cmd+V 已发送")
         }

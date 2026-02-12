@@ -199,14 +199,16 @@ final class ClipboardStore: ObservableObject {
         request.fetchLimit = 1
         request.predicate = NSPredicate(format: "contentHash == %@", payload.contentHash)
 
-        let item: ClipboardItem
+        // 去重：如果已存在相同内容，先删除旧条目，再新建
+        // 这样新条目的 createdAt 一定是最新的，排序一定在最前面
         if let existing = try? context.fetch(request).first {
-            item = existing
-        } else {
-            item = ClipboardItem(context: context)
-            item.id = UUID()
-            item.contentHash = payload.contentHash
+            thumbnailCache.removeThumbnail(forKey: existing.thumbnailKey)
+            context.delete(existing)
         }
+
+        let item = ClipboardItem(context: context)
+        item.id = UUID()
+        item.contentHash = payload.contentHash
 
         item.createdAt = now
         item.updatedAt = now
@@ -230,7 +232,6 @@ final class ClipboardStore: ObservableObject {
                 item.thumbnailBytes = 0
             }
         } else {
-            thumbnailCache.removeThumbnail(forKey: item.thumbnailKey)
             item.thumbnailKey = nil
             item.thumbnailBytes = 0
             item.imageData = nil
@@ -239,6 +240,9 @@ final class ClipboardStore: ObservableObject {
         saveContext()
         pruneIfNeeded()
         scheduleReload()
+
+        // 全局复制时播放音效
+        SoundManager.playCopySound()
     }
 
     private func pruneIfNeeded() {
