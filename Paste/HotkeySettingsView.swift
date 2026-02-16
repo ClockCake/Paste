@@ -1,3 +1,4 @@
+#if os(macOS)
 import SwiftUI
 
 // MARK: - 快捷键设置视图
@@ -132,3 +133,4 @@ struct HotkeySettingsView: View {
         }
     }
 }
+#endif

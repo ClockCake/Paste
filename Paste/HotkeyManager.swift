@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 import Carbon
 import Combine
@@ -233,3 +234,4 @@ private func keyCodeToString(_ keyCode: UInt16) -> String {
 
     return keyMap[keyCode] ?? "Key(\(keyCode))"
 }
+#endif

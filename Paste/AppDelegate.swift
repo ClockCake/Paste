@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 import ApplicationServices
 import Foundation
@@ -7,6 +8,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusMenu: NSMenu?
     /// 缓存主窗口引用，防止被释放后找不到
     private weak var mainWindow: NSWindow?
+    private var cloudSyncStatusObserver: NSObjectProtocol?
+    private var cloudSyncEnabled = false
+    private var cloudSyncInProgress = false
+    private var cloudSyncErrorMessage: String?
+    private var lastSuccessfulSyncDate: Date?
+    private var nowTick = Date()
+    private var relativeTimeRefreshTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.registerForRemoteNotifications()
@@ -18,6 +26,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.setupWindowDelegate()
             self?.setupHotkey()
         }
+    }
+
+    deinit {
+        if let cloudSyncStatusObserver {
+            NotificationCenter.default.removeObserver(cloudSyncStatusObserver)
+        }
+        relativeTimeRefreshTimer?.invalidate()
     }
 
     func application(
@@ -81,15 +96,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func setupStatusBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-
-        if let button = statusItem?.button {
-            let image = NSImage(systemSymbolName: "list.clipboard", accessibilityDescription: "Paste")
-            image?.isTemplate = true
-            button.image = image
-        }
-
+        applyCloudSyncStatus(PersistenceController.shared.cloudSyncStatusSnapshot)
+        updateStatusItemAppearance()
         setupStatusMenu()
         statusItem?.menu = statusMenu
+        observeCloudSyncStatus()
+        startRelativeTimeRefreshTimer()
     }
 
     private func setupStatusMenu() {
@@ -123,6 +135,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
+        let syncStatusItem = NSMenuItem(
+            title: cloudSyncStatusText(lang: lang),
+            action: nil,
+            keyEquivalent: ""
+        )
+        syncStatusItem.isEnabled = false
+        menu.addItem(syncStatusItem)
+
+        if cloudSyncEnabled {
+            let lastSyncedItem = NSMenuItem(
+                title: cloudLastSyncedText(lang: lang),
+                action: nil,
+                keyEquivalent: ""
+            )
+            lastSyncedItem.isEnabled = false
+            menu.addItem(lastSyncedItem)
+        }
+
+        if let errorText = cloudSyncMenuErrorText {
+            let errorItem = NSMenuItem(title: errorText, action: nil, keyEquivalent: "")
+            errorItem.isEnabled = false
+            menu.addItem(errorItem)
+        }
+
+        menu.addItem(NSMenuItem.separator())
+
         // 退出
         let quitItem = NSMenuItem(
             title: lang.quit,
@@ -131,6 +169,98 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         )
         quitItem.target = self
         menu.addItem(quitItem)
+    }
+
+    private func observeCloudSyncStatus() {
+        cloudSyncStatusObserver = NotificationCenter.default.addObserver(
+            forName: .cloudSyncStatusDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            self?.applyCloudSyncStatus(notification)
+            self?.updateStatusItemAppearance()
+            self?.updateMenuTitles()
+        }
+    }
+
+    private func applyCloudSyncStatus(_ snapshot: CloudSyncStatusSnapshot) {
+        cloudSyncEnabled = snapshot.enabled
+        cloudSyncInProgress = snapshot.inProgress
+        cloudSyncErrorMessage = snapshot.errorMessage
+        lastSuccessfulSyncDate = snapshot.lastSuccessfulSyncDate
+    }
+
+    private func applyCloudSyncStatus(_ notification: Notification) {
+        guard let userInfo = notification.userInfo else { return }
+        if let enabled = userInfo[CloudSyncStatusUserInfoKey.enabled] as? Bool {
+            cloudSyncEnabled = enabled
+        }
+        if let inProgress = userInfo[CloudSyncStatusUserInfoKey.inProgress] as? Bool {
+            cloudSyncInProgress = inProgress
+        }
+        if userInfo.keys.contains(CloudSyncStatusUserInfoKey.errorMessage) {
+            cloudSyncErrorMessage = userInfo[CloudSyncStatusUserInfoKey.errorMessage] as? String
+        }
+        if userInfo.keys.contains(CloudSyncStatusUserInfoKey.lastSuccessfulSyncDate) {
+            lastSuccessfulSyncDate = userInfo[CloudSyncStatusUserInfoKey.lastSuccessfulSyncDate] as? Date
+        }
+    }
+
+    private func updateStatusItemAppearance() {
+        guard let button = statusItem?.button else { return }
+        let image = NSImage(systemSymbolName: cloudSyncStatusSymbolName, accessibilityDescription: "Paste")
+            ?? NSImage(systemSymbolName: "list.clipboard", accessibilityDescription: "Paste")
+        image?.isTemplate = true
+        button.image = image
+        button.toolTip = statusItemTooltip(lang: SettingsManager.shared.l)
+    }
+
+    private var cloudSyncStatusSymbolName: String {
+        if cloudSyncErrorMessage != nil { return "exclamationmark.triangle.fill" }
+        if !cloudSyncEnabled { return "icloud.slash" }
+        if cloudSyncInProgress { return "arrow.triangle.2.circlepath" }
+        return "icloud.fill"
+    }
+
+    private func cloudSyncStatusText(lang: L) -> String {
+        if cloudSyncErrorMessage != nil { return lang.iCloudSyncFailed }
+        if !cloudSyncEnabled { return lang.iCloudOff }
+        if cloudSyncInProgress { return lang.iCloudSyncing }
+        return lang.iCloudOn
+    }
+
+    private func cloudLastSyncedText(lang: L) -> String {
+        guard let lastSuccessfulSyncDate else { return lang.iCloudNotSyncedYet }
+        return lang.iCloudLastSynced(lang.relativeTimeSince(lastSuccessfulSyncDate, now: nowTick))
+    }
+
+    private var cloudSyncMenuErrorText: String? {
+        guard let cloudSyncErrorMessage, !cloudSyncErrorMessage.isEmpty else { return nil }
+        if cloudSyncErrorMessage.count <= 90 { return cloudSyncErrorMessage }
+        return String(cloudSyncErrorMessage.prefix(87)) + "..."
+    }
+
+    private func statusItemTooltip(lang: L) -> String {
+        var lines = ["Paste", cloudSyncStatusText(lang: lang)]
+        if cloudSyncEnabled {
+            lines.append(cloudLastSyncedText(lang: lang))
+        }
+        if let errorText = cloudSyncMenuErrorText {
+            lines.append(errorText)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func startRelativeTimeRefreshTimer() {
+        relativeTimeRefreshTimer?.invalidate()
+        let timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.nowTick = Date()
+            self.updateStatusItemAppearance()
+            self.updateMenuTitles()
+        }
+        timer.tolerance = 5
+        relativeTimeRefreshTimer = timer
     }
 
     // MARK: - 菜单操作
@@ -209,7 +339,9 @@ final class AutoPasteManager {
                 let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
                 app.bundleIdentifier != Bundle.main.bundleIdentifier
             else { return }
-            self?.lastActiveApp = app
+            Task { @MainActor [weak self] in
+                self?.lastActiveApp = app
+            }
         }
     }
 
@@ -301,3 +433,4 @@ final class AutoPasteManager {
         keyUp?.post(tap: .cghidEventTap)
     }
 }
+#endif

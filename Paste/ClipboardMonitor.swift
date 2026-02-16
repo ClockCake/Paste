@@ -1,6 +1,8 @@
-import AppKit
 import CryptoKit
 import Foundation
+#if os(macOS)
+import AppKit
+#endif
 
 struct ClipboardPayload {
     let kind: ClipboardEntryKind
@@ -18,6 +20,7 @@ struct SourceApplicationInfo {
 
 @MainActor
 final class ClipboardMonitor {
+    #if os(macOS)
     private let pasteboard = NSPasteboard.general
     private var timer: Timer?
     private var lastChangeCount: Int
@@ -39,7 +42,9 @@ final class ClipboardMonitor {
         guard timer == nil else { return }
 
         let timer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
-            self?.pollPasteboard()
+            Task { @MainActor [weak self] in
+                self?.pollPasteboard()
+            }
         }
         timer.tolerance = 0.2
         self.timer = timer
@@ -141,4 +146,23 @@ final class ClipboardMonitor {
         input.append(payload)
         return SHA256.hash(data: input).map { String(format: "%02x", $0) }.joined()
     }
+    #else
+    private let onCapture: (ClipboardPayload, SourceApplicationInfo) -> Void
+
+    init(
+        pollInterval: TimeInterval = 0.7,
+        onCapture: @escaping (ClipboardPayload, SourceApplicationInfo) -> Void
+    ) {
+        _ = pollInterval
+        self.onCapture = onCapture
+    }
+
+    func start() {
+        // iOS 自动采集由 ClipboardStore 的前台策略负责，这里保持空实现。
+    }
+
+    func stop() {}
+
+    func skipNextCapture() {}
+    #endif
 }

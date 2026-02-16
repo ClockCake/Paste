@@ -3,14 +3,37 @@ import CoreData
 import Foundation
 import os
 
+extension Notification.Name {
+    static let cloudSyncStatusDidChange = Notification.Name("com.dorado.paste.cloudSyncStatusDidChange")
+}
+
+enum CloudSyncStatusUserInfoKey {
+    static let enabled = "enabled"
+    static let inProgress = "inProgress"
+    static let errorMessage = "errorMessage"
+    static let lastSuccessfulSyncDate = "lastSuccessfulSyncDate"
+}
+
+struct CloudSyncStatusSnapshot {
+    let enabled: Bool
+    let inProgress: Bool
+    let errorMessage: String?
+    let lastSuccessfulSyncDate: Date?
+}
+
 final class PersistenceController {
-    static let shared = PersistenceController()
+    static var shared = PersistenceController()
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Paste", category: "CloudSync")
 
     let container: NSPersistentCloudKitContainer
     let cloudSyncEnabled: Bool
     let cloudSyncErrorMessage: String?
     let thumbnailCache: ThumbnailCache
+    private var cloudKitEventObserver: NSObjectProtocol?
+    private var activeCloudEventIDs: Set<UUID> = []
+    private var runtimeCloudErrorMessage: String?
+    private var lastCloudErrorDate: Date?
+    private var lastSuccessfulSyncDate: Date?
 
     private init() {
         let model = Self.makeManagedObjectModel()
@@ -70,6 +93,7 @@ final class PersistenceController {
         container = resolvedContainer
         cloudSyncEnabled = resolvedCloudSyncEnabled
         cloudSyncErrorMessage = resolvedCloudSyncErrorMessage
+        runtimeCloudErrorMessage = resolvedCloudSyncErrorMessage
 
         container.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
         container.viewContext.automaticallyMergesChangesFromParent = true
@@ -79,6 +103,22 @@ final class PersistenceController {
         logCloudSyncStatus()
 
         registerCloudKitEventObserverIfNeeded()
+        emitCloudSyncStatus()
+    }
+
+    deinit {
+        if let cloudKitEventObserver {
+            NotificationCenter.default.removeObserver(cloudKitEventObserver)
+        }
+    }
+
+    var cloudSyncStatusSnapshot: CloudSyncStatusSnapshot {
+        CloudSyncStatusSnapshot(
+            enabled: cloudSyncEnabled,
+            inProgress: cloudSyncEnabled && !activeCloudEventIDs.isEmpty,
+            errorMessage: runtimeCloudErrorMessage,
+            lastSuccessfulSyncDate: lastSuccessfulSyncDate
+        )
     }
 
     private func logCloudSyncStatus() {
@@ -181,7 +221,20 @@ final class PersistenceController {
     }
 
     private static func defaultCloudContainerIdentifier() -> String {
-        let bundleIdentifier = Bundle.main.bundleIdentifier ?? "com.dorado.paste"
+        if
+            let configured = Bundle.main.object(forInfoDictionaryKey: "ICloudContainerIdentifier") as? String,
+            !configured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return configured
+        }
+        let bundleIdentifier = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? "com.dorado.paste"
+        if bundleIdentifier.lowercased().hasSuffix(".ios") {
+            let base = String(bundleIdentifier.dropLast(4))
+            if !base.isEmpty {
+                return "iCloud.\(base)"
+            }
+        }
         return "iCloud.\(bundleIdentifier)"
     }
 
@@ -191,6 +244,12 @@ final class PersistenceController {
             return true
         }
         return defaults.bool(forKey: "iCloudSyncEnabled")
+    }
+
+    @discardableResult
+    static func reloadShared() -> PersistenceController {
+        shared = PersistenceController()
+        return shared
     }
 
     private static func describeCloudKitError(_ error: Error, containerIdentifier: String) -> String {
@@ -208,11 +267,12 @@ final class PersistenceController {
 
     private func registerCloudKitEventObserverIfNeeded() {
         guard cloudSyncEnabled else { return }
-        _ = NotificationCenter.default.addObserver(
+        cloudKitEventObserver = NotificationCenter.default.addObserver(
             forName: NSPersistentCloudKitContainer.eventChangedNotification,
             object: container,
             queue: .main
-        ) { notification in
+        ) { [weak self] notification in
+            guard let self else { return }
             guard
                 let event = notification.userInfo?[NSPersistentCloudKitContainer.eventNotificationUserInfoKey]
                     as? NSPersistentCloudKitContainer.Event
@@ -220,10 +280,53 @@ final class PersistenceController {
                 return
             }
 
+            if event.endDate == nil {
+                self.activeCloudEventIDs.insert(event.identifier)
+                self.runtimeCloudErrorMessage = nil
+            } else {
+                self.activeCloudEventIDs.remove(event.identifier)
+            }
+
             if let error = event.error {
                 Self.logger.error("CloudKit event error: \(error, privacy: .public)")
+                let nsError = error as NSError
+                self.lastCloudErrorDate = event.endDate ?? Date()
+                self.runtimeCloudErrorMessage =
+                    "\(nsError.domain)(\(nsError.code)): \(nsError.localizedDescription)"
+            } else if let endDate = event.endDate {
+                if let existingDate = self.lastSuccessfulSyncDate {
+                    self.lastSuccessfulSyncDate = max(existingDate, endDate)
+                } else {
+                    self.lastSuccessfulSyncDate = endDate
+                }
             }
+
+            if
+                let lastSuccessfulSyncDate = self.lastSuccessfulSyncDate,
+                let lastCloudErrorDate = self.lastCloudErrorDate,
+                lastSuccessfulSyncDate >= lastCloudErrorDate
+            {
+                self.runtimeCloudErrorMessage = nil
+            } else if event.endDate != nil && self.activeCloudEventIDs.isEmpty && event.error == nil {
+                self.runtimeCloudErrorMessage = nil
+            }
+
+            self.emitCloudSyncStatus()
         }
+    }
+
+    private func emitCloudSyncStatus() {
+        let userInfo: [String: Any] = [
+            CloudSyncStatusUserInfoKey.enabled: cloudSyncEnabled,
+            CloudSyncStatusUserInfoKey.inProgress: cloudSyncEnabled && !activeCloudEventIDs.isEmpty,
+            CloudSyncStatusUserInfoKey.errorMessage: runtimeCloudErrorMessage as Any,
+            CloudSyncStatusUserInfoKey.lastSuccessfulSyncDate: lastSuccessfulSyncDate as Any
+        ]
+        NotificationCenter.default.post(
+            name: .cloudSyncStatusDidChange,
+            object: self,
+            userInfo: userInfo
+        )
     }
 
     /// 处理远程推送通知

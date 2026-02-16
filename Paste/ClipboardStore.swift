@@ -1,7 +1,12 @@
-import AppKit
 import Combine
 import CoreData
+import CryptoKit
 import Foundation
+#if os(macOS)
+import AppKit
+#elseif os(iOS)
+import UIKit
+#endif
 
 @MainActor
 final class ClipboardStore: ObservableObject {
@@ -13,8 +18,10 @@ final class ClipboardStore: ObservableObject {
     @Published private(set) var totalItems: Int = 0
     @Published private(set) var totalStorageBytes: Int64 = 0
 
-    let cloudSyncEnabled: Bool
-    let cloudSyncErrorMessage: String?
+    @Published private(set) var cloudSyncEnabled: Bool
+    @Published private(set) var cloudSyncErrorMessage: String?
+    @Published private(set) var cloudSyncInProgress: Bool = false
+    @Published private(set) var lastSuccessfulCloudSyncDate: Date?
 
     private let maxStorageBytes: Int64 = 2 * 1024 * 1024 * 1024
 
@@ -26,16 +33,32 @@ final class ClipboardStore: ObservableObject {
     private var observers: [NSObjectProtocol] = []
     private var started = false
     private var reloadScheduled = false
+    private var needsGlobalDedup = true
+    #if os(iOS)
+    private var iosAutoImportTimer: Timer?
+    private var lastObservedPasteboardChangeCount: Int?
+    #endif
 
     init(persistence: PersistenceController) {
         self.persistence = persistence
         context = persistence.container.viewContext
         thumbnailCache = persistence.thumbnailCache
-        cloudSyncEnabled = persistence.cloudSyncEnabled
-        cloudSyncErrorMessage = persistence.cloudSyncErrorMessage
+        let syncSnapshot = persistence.cloudSyncStatusSnapshot
+        cloudSyncEnabled = syncSnapshot.enabled
+        cloudSyncErrorMessage = syncSnapshot.errorMessage
+        cloudSyncInProgress = syncSnapshot.inProgress
+        lastSuccessfulCloudSyncDate = syncSnapshot.lastSuccessfulSyncDate
 
         registerObservers()
         reloadCards()
+    }
+
+    deinit {
+        let center = NotificationCenter.default
+        observers.forEach(center.removeObserver)
+        #if os(iOS)
+        iosAutoImportTimer?.invalidate()
+        #endif
     }
 
     var storageText: String {
@@ -82,15 +105,21 @@ final class ClipboardStore: ObservableObject {
         }
         monitor.start()
         self.monitor = monitor
+        #if os(iOS)
+        startIOSAutoImport()
+        #endif
     }
 
     func stop() {
+        #if os(iOS)
+        stopIOSAutoImport()
+        #endif
         monitor?.stop()
         monitor = nil
         started = false
     }
 
-    func thumbnail(forKey key: String?) -> NSImage? {
+    func thumbnail(forKey key: String?) -> PlatformImage? {
         // 先尝试从缓存读取
         if let image = thumbnailCache.image(forKey: key) {
             return image
@@ -111,28 +140,59 @@ final class ClipboardStore: ObservableObject {
         return thumbnailCache.image(forKey: key)
     }
 
+    func fullImage(for card: ClipboardCard) -> PlatformImage? {
+        guard
+            let item = fetchItem(id: card.id),
+            let imageData = item.imageData
+        else {
+            return nil
+        }
+        return PlatformImage(data: imageData)
+    }
+
     func copy(_ card: ClipboardCard) {
         guard let item = fetchItem(id: card.id) else { return }
 
+        #if os(macOS)
         let pasteboard = NSPasteboard.general
         monitor?.skipNextCapture()
         pasteboard.clearContents()
+        #elseif os(iOS)
+        let pasteboard = UIPasteboard.general
+        #endif
 
         switch item.kind {
         case .text:
             if let text = item.textContent {
+                #if os(macOS)
                 pasteboard.setString(text, forType: .string)
+                #elseif os(iOS)
+                pasteboard.string = text
+                #endif
             }
         case .url:
             if let urlString = item.urlString, let url = URL(string: urlString) {
+                #if os(macOS)
                 pasteboard.writeObjects([url as NSURL])
                 pasteboard.setString(urlString, forType: .string)
+                #elseif os(iOS)
+                pasteboard.url = url
+                pasteboard.string = urlString
+                #endif
             } else if let urlString = item.urlString {
+                #if os(macOS)
                 pasteboard.setString(urlString, forType: .string)
+                #elseif os(iOS)
+                pasteboard.string = urlString
+                #endif
             }
         case .image:
-            if let imageData = item.imageData, let image = NSImage(data: imageData) {
+            if let imageData = item.imageData, let image = PlatformImage(data: imageData) {
+                #if os(macOS)
                 pasteboard.writeObjects([image])
+                #elseif os(iOS)
+                pasteboard.image = image
+                #endif
             }
         }
     }
@@ -166,6 +226,60 @@ final class ClipboardStore: ObservableObject {
         scheduleReload()
     }
 
+    #if os(iOS)
+    private func currentPasteboardPayload(from pasteboard: UIPasteboard) -> ClipboardPayload? {
+        if let imageData = ImageCoder.normalizedJPEGData(from: pasteboard) {
+            return ClipboardPayload(
+                kind: .image,
+                text: nil,
+                urlString: nil,
+                imageData: imageData,
+                contentHash: contentHash(kind: .image, payload: imageData),
+                payloadBytes: Int64(imageData.count)
+            )
+        }
+
+        if let url = pasteboard.url {
+            let urlString = url.absoluteString
+            return ClipboardPayload(
+                kind: .url,
+                text: nil,
+                urlString: urlString,
+                imageData: nil,
+                contentHash: contentHash(kind: .url, payload: Data(urlString.utf8)),
+                payloadBytes: Int64(urlString.utf8.count)
+            )
+        }
+
+        if
+            let text = pasteboard.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !text.isEmpty
+        {
+            if let url = URL(string: text), url.scheme != nil {
+                return ClipboardPayload(
+                    kind: .url,
+                    text: nil,
+                    urlString: text,
+                    imageData: nil,
+                    contentHash: contentHash(kind: .url, payload: Data(text.utf8)),
+                    payloadBytes: Int64(text.utf8.count)
+                )
+            }
+
+            return ClipboardPayload(
+                kind: .text,
+                text: text,
+                urlString: nil,
+                imageData: nil,
+                contentHash: contentHash(kind: .text, payload: Data(text.utf8)),
+                payloadBytes: Int64(text.utf8.count)
+            )
+        }
+
+        return nil
+    }
+    #endif
+
     private func registerObservers() {
         let center = NotificationCenter.default
 
@@ -175,7 +289,7 @@ final class ClipboardStore: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             // 延迟执行避免在视图更新期间发布变更
-            Task { @MainActor in
+            DispatchQueue.main.async { [weak self] in
                 self?.scheduleReload()
             }
         }
@@ -185,25 +299,128 @@ final class ClipboardStore: ObservableObject {
             object: persistence.container.persistentStoreCoordinator,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
+            DispatchQueue.main.async { [weak self] in
+                self?.needsGlobalDedup = true
                 self?.scheduleReload()
             }
         }
 
-        observers = [contextObserver, remoteObserver]
+        let cloudSyncStatusObserver = center.addObserver(
+            forName: .cloudSyncStatusDidChange,
+            object: persistence,
+            queue: .main
+        ) { [weak self] notification in
+            DispatchQueue.main.async { [weak self] in
+                self?.applyCloudSyncStatus(notification)
+            }
+        }
+
+        var registeredObservers = [contextObserver, remoteObserver, cloudSyncStatusObserver]
+
+        #if os(iOS)
+        let didBecomeActiveObserver = center.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.startIOSAutoImport()
+        }
+
+        let willResignActiveObserver = center.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.stopIOSAutoImport()
+        }
+
+        let pasteboardChangedObserver = center.addObserver(
+            forName: UIPasteboard.changedNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard UIApplication.shared.applicationState == .active else { return }
+            self?.autoImportFromCurrentPasteboardIfNeeded()
+        }
+
+        registeredObservers.append(didBecomeActiveObserver)
+        registeredObservers.append(willResignActiveObserver)
+        registeredObservers.append(pasteboardChangedObserver)
+        #endif
+
+        observers = registeredObservers
     }
 
-    private func save(payload: ClipboardPayload, sourceApp: SourceApplicationInfo) {
+    private func applyCloudSyncStatus(_ notification: Notification) {
+        guard let userInfo = notification.userInfo else { return }
+        if let enabled = userInfo[CloudSyncStatusUserInfoKey.enabled] as? Bool {
+            cloudSyncEnabled = enabled
+        }
+        if let inProgress = userInfo[CloudSyncStatusUserInfoKey.inProgress] as? Bool {
+            cloudSyncInProgress = inProgress
+        }
+        if userInfo.keys.contains(CloudSyncStatusUserInfoKey.errorMessage) {
+            cloudSyncErrorMessage = userInfo[CloudSyncStatusUserInfoKey.errorMessage] as? String
+        }
+        if userInfo.keys.contains(CloudSyncStatusUserInfoKey.lastSuccessfulSyncDate) {
+            lastSuccessfulCloudSyncDate = userInfo[CloudSyncStatusUserInfoKey.lastSuccessfulSyncDate] as? Date
+        }
+    }
+
+    #if os(iOS)
+    private func startIOSAutoImport() {
+        guard UIApplication.shared.applicationState == .active else { return }
+        _ = autoImportFromCurrentPasteboardIfNeeded(force: lastObservedPasteboardChangeCount == nil)
+        guard iosAutoImportTimer == nil else { return }
+
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.9, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.autoImportFromCurrentPasteboardIfNeeded()
+            }
+        }
+        timer.tolerance = 0.2
+        iosAutoImportTimer = timer
+    }
+
+    private func stopIOSAutoImport() {
+        iosAutoImportTimer?.invalidate()
+        iosAutoImportTimer = nil
+    }
+
+    @discardableResult
+    private func autoImportFromCurrentPasteboardIfNeeded(force: Bool = false) -> Bool {
+        let pasteboard = UIPasteboard.general
+        let currentChangeCount = pasteboard.changeCount
+        if !force, let lastObservedPasteboardChangeCount, lastObservedPasteboardChangeCount == currentChangeCount {
+            return false
+        }
+        lastObservedPasteboardChangeCount = currentChangeCount
+
+        guard let payload = currentPasteboardPayload(from: pasteboard) else {
+            return false
+        }
+
+        let source = SourceApplicationInfo(
+            name: "iOS Clipboard",
+            bundleID: "system.pasteboard"
+        )
+        save(payload: payload, sourceApp: source, playFeedback: false)
+        return true
+    }
+    #endif
+
+    private func save(payload: ClipboardPayload, sourceApp: SourceApplicationInfo, playFeedback: Bool = true) {
         let now = Date()
         let request = ClipboardItem.fetchRequest()
-        request.fetchLimit = 1
         request.predicate = NSPredicate(format: "contentHash == %@", payload.contentHash)
 
         // 去重：如果已存在相同内容，先删除旧条目，再新建
         // 这样新条目的 createdAt 一定是最新的，排序一定在最前面
-        if let existing = try? context.fetch(request).first {
-            thumbnailCache.removeThumbnail(forKey: existing.thumbnailKey)
-            context.delete(existing)
+        if let existingItems = try? context.fetch(request), !existingItems.isEmpty {
+            existingItems.forEach { existing in
+                thumbnailCache.removeThumbnail(forKey: existing.thumbnailKey)
+                context.delete(existing)
+            }
         }
 
         let item = ClipboardItem(context: context)
@@ -241,8 +458,10 @@ final class ClipboardStore: ObservableObject {
         pruneIfNeeded()
         scheduleReload()
 
-        // 全局复制时播放音效
-        SoundManager.playCopySound()
+        if playFeedback {
+            // 全局复制时播放音效
+            SoundManager.playCopySound()
+        }
     }
 
     private func pruneIfNeeded() {
@@ -269,6 +488,11 @@ final class ClipboardStore: ObservableObject {
     }
 
     private func reloadCards() {
+        if needsGlobalDedup {
+            deduplicateByContentHash()
+            needsGlobalDedup = false
+        }
+
         let request = ClipboardItem.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: false)]
 
@@ -312,7 +536,7 @@ final class ClipboardStore: ObservableObject {
             // 计算图片尺寸
             var imageWidth: Int?
             var imageHeight: Int?
-            if item.kind == .image, let imageData = item.imageData, let image = NSImage(data: imageData) {
+            if item.kind == .image, let imageData = item.imageData, let image = PlatformImage(data: imageData) {
                 imageWidth = Int(image.size.width)
                 imageHeight = Int(image.size.height)
             }
@@ -366,5 +590,36 @@ final class ClipboardStore: ObservableObject {
     private func saveContext() {
         guard context.hasChanges else { return }
         try? context.save()
+    }
+
+    private func deduplicateByContentHash() {
+        let request = ClipboardItem.fetchRequest()
+        request.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: false)]
+        guard let allItems = try? context.fetch(request), !allItems.isEmpty else { return }
+
+        var seen = Set<String>()
+        var didDelete = false
+
+        for item in allItems {
+            let hash = item.contentHash
+            guard !hash.isEmpty else { continue }
+            if seen.contains(hash) {
+                thumbnailCache.removeThumbnail(forKey: item.thumbnailKey)
+                context.delete(item)
+                didDelete = true
+            } else {
+                seen.insert(hash)
+            }
+        }
+
+        if didDelete {
+            saveContext()
+        }
+    }
+
+    private func contentHash(kind: ClipboardEntryKind, payload: Data) -> String {
+        var input = Data(kind.rawValue.utf8)
+        input.append(payload)
+        return SHA256.hash(data: input).map { String(format: "%02x", $0) }.joined()
     }
 }

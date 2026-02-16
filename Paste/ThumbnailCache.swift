@@ -1,8 +1,12 @@
-import AppKit
 import Foundation
+#if os(macOS)
+import AppKit
+#elseif os(iOS)
+import UIKit
+#endif
 
 final class ThumbnailCache {
-    private let memoryCache = NSCache<NSString, NSImage>()
+    private let memoryCache = NSCache<NSString, PlatformImage>()
     private let fileManager = FileManager.default
     private let directoryURL: URL
 
@@ -16,7 +20,7 @@ final class ThumbnailCache {
         directoryURL = directory
     }
 
-    func image(forKey key: String?) -> NSImage? {
+    func image(forKey key: String?) -> PlatformImage? {
         guard let key else { return nil }
 
         if let image = memoryCache.object(forKey: key as NSString) {
@@ -26,7 +30,7 @@ final class ThumbnailCache {
         let url = fileURL(forKey: key)
         guard
             let data = try? Data(contentsOf: url),
-            let image = NSImage(data: data)
+            let image = PlatformImage(data: data)
         else {
             return nil
         }
@@ -43,7 +47,7 @@ final class ThumbnailCache {
             try? data.write(to: url, options: .atomic)
         }
 
-        if let image = NSImage(data: data) {
+        if let image = PlatformImage(data: data) {
             memoryCache.setObject(image, forKey: key as NSString)
         }
 
