@@ -406,10 +406,26 @@ final class ClipboardStore: ObservableObject {
             return false
         }
 
-        let source = SourceApplicationInfo(
-            name: "iOS Clipboard",
-            bundleID: "system.pasteboard"
-        )
+        // 如果同内容已经由 iCloud 同步过来且有真实来源信息，不要覆盖
+        let existingRequest = ClipboardItem.fetchRequest()
+        existingRequest.predicate = NSPredicate(format: "contentHash == %@", payload.contentHash)
+        if let existingItems = try? context.fetch(existingRequest),
+           let existing = existingItems.first,
+           let existingBundleID = existing.sourceBundleID,
+           existingBundleID != "system.pasteboard" && existingBundleID != "unknown.bundle" {
+            return false
+        }
+
+        // 尝试通过 UTI 类型推断来源 App
+        let source: SourceApplicationInfo
+        if let inferred = UTIAppIdentifier.inferSourceApp(from: pasteboard.types) {
+            source = inferred
+        } else {
+            source = SourceApplicationInfo(
+                name: "iOS Clipboard",
+                bundleID: "system.pasteboard"
+            )
+        }
         save(payload: payload, sourceApp: source, playFeedback: false)
         return true
     }

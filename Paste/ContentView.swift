@@ -865,6 +865,9 @@ private struct ClipboardCardView: View {
     @EnvironmentObject private var store: ClipboardStore
     @EnvironmentObject private var settings: SettingsManager
     @State private var isHovered = false
+    #if os(iOS)
+    @State private var resolvedAppIcon: PlatformImage?
+    #endif
 
     let card: ClipboardCard
     let onCopy: () -> Void
@@ -1144,38 +1147,43 @@ private struct ClipboardCardView: View {
 
     private func appIcon(for bundleID: String) -> PlatformImage? {
         #if os(macOS)
-        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
-            return nil
-        }
-        return NSWorkspace.shared.icon(forFile: appURL.path)
+        return AppIconProvider.shared.cachedIcon(for: bundleID)
         #else
-        _ = bundleID
-        return nil
+        return resolvedAppIcon ?? AppIconProvider.shared.cachedIcon(for: bundleID)
         #endif
     }
 
     @ViewBuilder
     private var sourceIcon: some View {
-        if let icon = appIcon(for: card.sourceBundleID) {
-            Image(platformImage: icon)
-                .resizable()
-                .frame(width: 28, height: 28)
-        } else {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(sourceBadgeColor.opacity(0.16))
-                .frame(width: 28, height: 28)
-                .overlay {
-                    if let symbol = sourceFallbackSymbol {
-                        Image(systemName: symbol)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(sourceBadgeColor)
-                    } else {
-                        Text(sourceInitial)
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(sourceBadgeColor)
+        Group {
+            if let icon = appIcon(for: card.sourceBundleID) {
+                Image(platformImage: icon)
+                    .resizable()
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .frame(width: 28, height: 28)
+            } else {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(sourceBadgeColor.opacity(0.16))
+                    .frame(width: 28, height: 28)
+                    .overlay {
+                        if let symbol = sourceFallbackSymbol {
+                            Image(systemName: symbol)
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(sourceBadgeColor)
+                        } else {
+                            Text(sourceInitial)
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(sourceBadgeColor)
+                        }
                     }
-                }
+            }
         }
+        #if os(iOS)
+        .task(id: card.sourceBundleID) {
+            guard AppIconProvider.shared.cachedIcon(for: card.sourceBundleID) == nil else { return }
+            resolvedAppIcon = await AppIconProvider.shared.fetchIconIfNeeded(for: card.sourceBundleID)
+        }
+        #endif
     }
 
     private var sourceInitial: String {
