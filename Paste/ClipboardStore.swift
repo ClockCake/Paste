@@ -406,26 +406,17 @@ final class ClipboardStore: ObservableObject {
             return false
         }
 
-        // 如果同内容已经由 iCloud 同步过来且有真实来源信息，不要覆盖
+        // 如果同内容已存在（无论来自 iCloud 同步还是本地），跳过不重复创建
         let existingRequest = ClipboardItem.fetchRequest()
         existingRequest.predicate = NSPredicate(format: "contentHash == %@", payload.contentHash)
-        if let existingItems = try? context.fetch(existingRequest),
-           let existing = existingItems.first,
-           let existingBundleID = existing.sourceBundleID,
-           existingBundleID != "system.pasteboard" && existingBundleID != "unknown.bundle" {
+        if let existingItems = try? context.fetch(existingRequest), !existingItems.isEmpty {
             return false
         }
 
-        // 尝试通过 UTI 类型推断来源 App
-        let source: SourceApplicationInfo
-        if let inferred = UTIAppIdentifier.inferSourceApp(from: pasteboard.types) {
-            source = inferred
-        } else {
-            source = SourceApplicationInfo(
-                name: "iOS Clipboard",
-                bundleID: "system.pasteboard"
-            )
-        }
+        let source = SourceApplicationInfo(
+            name: "iOS Clipboard",
+            bundleID: "system.pasteboard"
+        )
         save(payload: payload, sourceApp: source, playFeedback: false)
         return true
     }
@@ -619,18 +610,31 @@ final class ClipboardStore: ObservableObject {
         request.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: false)]
         guard let allItems = try? context.fetch(request), !allItems.isEmpty else { return }
 
-        var seen = Set<String>()
-        var didDelete = false
-
+        // 按 contentHash 分组
+        var groups: [String: [ClipboardItem]] = [:]
         for item in allItems {
             let hash = item.contentHash
             guard !hash.isEmpty else { continue }
-            if seen.contains(hash) {
+            groups[hash, default: []].append(item)
+        }
+
+        var didDelete = false
+        for (_, items) in groups where items.count > 1 {
+            // 优先保留有真实来源的条目（非 system.pasteboard / unknown.bundle）
+            let keeper: ClipboardItem
+            if let realSource = items.first(where: {
+                let bid = $0.sourceBundleID ?? ""
+                return !bid.isEmpty && bid != "system.pasteboard" && bid != "unknown.bundle"
+            }) {
+                keeper = realSource
+            } else {
+                keeper = items[0] // 都没有真实来源，保留最新的
+            }
+
+            for item in items where item !== keeper {
                 thumbnailCache.removeThumbnail(forKey: item.thumbnailKey)
                 context.delete(item)
                 didDelete = true
-            } else {
-                seen.insert(hash)
             }
         }
 
