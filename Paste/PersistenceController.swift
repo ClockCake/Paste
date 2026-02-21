@@ -34,6 +34,10 @@ final class PersistenceController {
     private var runtimeCloudErrorMessage: String?
     private var lastCloudErrorDate: Date?
     private var lastSuccessfulSyncDate: Date?
+    /// 防抖：延迟发送"同步结束"状态，避免快速事件切换导致 UI 闪烁
+    private var idleDebounceWork: DispatchWorkItem?
+    /// 上一次发送给 UI 的 inProgress 值，用于避免重复发送
+    private var lastEmittedInProgress: Bool = false
 
     private init() {
         let model = Self.makeManagedObjectModel()
@@ -316,9 +320,37 @@ final class PersistenceController {
     }
 
     private func emitCloudSyncStatus() {
+        let inProgress = cloudSyncEnabled && !activeCloudEventIDs.isEmpty
+
+        // 取消之前排队的防抖发送
+        idleDebounceWork?.cancel()
+        idleDebounceWork = nil
+
+        if inProgress {
+            // 进入同步中：仅在状态真正变化时立即发送，避免重复刷新
+            guard !lastEmittedInProgress else { return }
+            lastEmittedInProgress = true
+            postCloudSyncNotification(inProgress: true)
+        } else if lastEmittedInProgress {
+            // 从同步中 → 空闲：延迟 1.5 秒再发送 idle 状态
+            // 如果期间有新事件开始，上面会 cancel 这个 work item
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.lastEmittedInProgress = false
+                self.postCloudSyncNotification(inProgress: false)
+            }
+            idleDebounceWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
+        } else {
+            // 本来就是空闲状态（如错误消息变化），直接发送
+            postCloudSyncNotification(inProgress: false)
+        }
+    }
+
+    private func postCloudSyncNotification(inProgress: Bool) {
         let userInfo: [String: Any] = [
             CloudSyncStatusUserInfoKey.enabled: cloudSyncEnabled,
-            CloudSyncStatusUserInfoKey.inProgress: cloudSyncEnabled && !activeCloudEventIDs.isEmpty,
+            CloudSyncStatusUserInfoKey.inProgress: inProgress,
             CloudSyncStatusUserInfoKey.errorMessage: runtimeCloudErrorMessage as Any,
             CloudSyncStatusUserInfoKey.lastSuccessfulSyncDate: lastSuccessfulSyncDate as Any
         ]

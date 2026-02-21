@@ -310,12 +310,15 @@ struct ContentView: View {
             if store.cloudSyncInProgress {
                 ProgressView()
                     .controlSize(.mini)
+                    .transition(.opacity)
             }
             Image(systemName: cloudSyncStatusSymbol)
                 .symbolRenderingMode(.hierarchical)
             Text(cloudSyncStatusText)
         }
         .foregroundStyle(cloudSyncStatusTint)
+        .animation(.easeInOut(duration: 0.35), value: store.cloudSyncInProgress)
+        .animation(.easeInOut(duration: 0.35), value: store.cloudSyncErrorMessage == nil)
     }
 
     @ViewBuilder

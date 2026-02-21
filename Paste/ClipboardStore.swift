@@ -353,17 +353,23 @@ final class ClipboardStore: ObservableObject {
 
     private func applyCloudSyncStatus(_ notification: Notification) {
         guard let userInfo = notification.userInfo else { return }
-        if let enabled = userInfo[CloudSyncStatusUserInfoKey.enabled] as? Bool {
+        if let enabled = userInfo[CloudSyncStatusUserInfoKey.enabled] as? Bool, enabled != cloudSyncEnabled {
             cloudSyncEnabled = enabled
         }
-        if let inProgress = userInfo[CloudSyncStatusUserInfoKey.inProgress] as? Bool {
+        if let inProgress = userInfo[CloudSyncStatusUserInfoKey.inProgress] as? Bool, inProgress != cloudSyncInProgress {
             cloudSyncInProgress = inProgress
         }
         if userInfo.keys.contains(CloudSyncStatusUserInfoKey.errorMessage) {
-            cloudSyncErrorMessage = userInfo[CloudSyncStatusUserInfoKey.errorMessage] as? String
+            let newError = userInfo[CloudSyncStatusUserInfoKey.errorMessage] as? String
+            if newError != cloudSyncErrorMessage {
+                cloudSyncErrorMessage = newError
+            }
         }
         if userInfo.keys.contains(CloudSyncStatusUserInfoKey.lastSuccessfulSyncDate) {
-            lastSuccessfulCloudSyncDate = userInfo[CloudSyncStatusUserInfoKey.lastSuccessfulSyncDate] as? Date
+            let newDate = userInfo[CloudSyncStatusUserInfoKey.lastSuccessfulSyncDate] as? Date
+            if newDate != lastSuccessfulCloudSyncDate {
+                lastSuccessfulCloudSyncDate = newDate
+            }
         }
     }
 
