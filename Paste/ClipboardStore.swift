@@ -413,11 +413,30 @@ final class ClipboardStore: ObservableObject {
             return false
         }
 
-        let source = SourceApplicationInfo(
-            name: "iOS Clipboard",
-            bundleID: "system.pasteboard"
-        )
-        save(payload: payload, sourceApp: source, playFeedback: false)
+        if cloudSyncEnabled {
+            // iCloud 同步启用时，延迟创建以等待 CloudKit 同步 Mac 端的真实条目
+            // Universal Clipboard 比 CloudKit 快得多，直接创建会导致来源显示为 "iOS Clipboard"
+            let hash = payload.contentHash
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+                guard let self else { return }
+                let check = ClipboardItem.fetchRequest()
+                check.predicate = NSPredicate(format: "contentHash == %@", hash)
+                if let existing = try? self.context.fetch(check), !existing.isEmpty {
+                    return // CloudKit 已同步真实条目，跳过本地创建
+                }
+                let source = SourceApplicationInfo(
+                    name: "iOS Clipboard",
+                    bundleID: "system.pasteboard"
+                )
+                self.save(payload: payload, sourceApp: source, playFeedback: false)
+            }
+        } else {
+            let source = SourceApplicationInfo(
+                name: "iOS Clipboard",
+                bundleID: "system.pasteboard"
+            )
+            save(payload: payload, sourceApp: source, playFeedback: false)
+        }
         return true
     }
     #endif
