@@ -87,6 +87,7 @@ jobs:
             PROVISIONING_PROFILE_SPECIFIER="$PP_UUID" \
             CODE_SIGNING_REQUIRED=YES \
             CODE_SIGNING_ALLOWED=YES \
+            ENABLE_HARDENED_RUNTIME=YES \
             SWIFT_TREAT_WARNINGS_AS_ERRORS=NO
 
       - name: 打包 DMG
@@ -107,11 +108,24 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          xcrun notarytool submit build/Paste.dmg \
+          SUBMIT_OUTPUT=$(xcrun notarytool submit build/Paste.dmg \
             --apple-id "$APPLE_ID" \
             --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_APP_PASSWORD" \
-            --wait
+            --wait 2>&1)
+          echo "$SUBMIT_OUTPUT"
+
+          # 提取 submission ID 并获取详细日志
+          SUBMISSION_ID=$(echo "$SUBMIT_OUTPUT" | grep -m1 'id:' | awk '{print $2}')
+          if echo "$SUBMIT_OUTPUT" | grep -q "Invalid"; then
+            echo "=== 公证失败，获取详细日志 ==="
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --apple-id "$APPLE_ID" \
+              --team-id "$APPLE_TEAM_ID" \
+              --password "$APPLE_APP_PASSWORD"
+            exit 1
+          fi
+
           xcrun stapler staple build/Paste.dmg
 
       - name: 清理钥匙串和 Profile
