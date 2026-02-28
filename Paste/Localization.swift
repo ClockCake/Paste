@@ -188,8 +188,8 @@ struct L {
     }
     var accessibilityPermissionMessage: String {
         lang == .zh
-            ? "自动粘贴功能需要\u{300C}辅助功能\u{300D}权限来模拟键盘输入。请在系统设置中授权本应用。"
-            : "Auto paste needs Accessibility permission to simulate keyboard input. Please grant access in System Settings."
+            ? "自动粘贴功能需要\u{300C}辅助功能\u{300D}权限来模拟键盘输入。\n\n请前往「系统设置 → 隐私与安全性 → 辅助功能」，找到 Paste 并开启开关。\n如果列表中没有 Paste，请点击「+」按钮手动添加。"
+            : "Auto paste needs Accessibility permission to simulate keyboard input.\n\nGo to System Settings → Privacy & Security → Accessibility, find Paste and enable the toggle.\nIf Paste is not listed, click the \"+\" button to add it manually."
     }
     var openSystemSettings: String {
         lang == .zh ? "打开系统设置" : "Open System Settings"

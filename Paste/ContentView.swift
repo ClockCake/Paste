@@ -803,8 +803,16 @@ struct ContentView: View {
     private func ensureAccessibilityPermission() {
         #if os(macOS)
         guard !AutoPasteManager.shared.isAccessibilityGranted else { return }
+        // 调用系统 API 弹出权限请求对话框，系统会自动将 App 添加到辅助功能列表
+        // 并显示带有"打开系统设置"按钮的系统对话框
         AutoPasteManager.shared.requestAccessibilityIfNeeded()
-        showingAccessibilityAlert = true
+        // 延迟检查：给系统对话框足够时间显示和用户操作
+        // 如果用户关闭了系统对话框但仍未授权，再显示自定义提示作为备用
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [self] in
+            if !AutoPasteManager.shared.isAccessibilityGranted {
+                showingAccessibilityAlert = true
+            }
+        }
         #endif
     }
 
