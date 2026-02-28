@@ -355,14 +355,26 @@ final class AutoPasteManager {
 
     // MARK: - 权限管理
 
-    /// 检查当前是否已获得辅助功能权限
+    /// 检查当前是否已获得自动粘贴所需权限（优先 PostEvent，其次 AX）
     var isAccessibilityGranted: Bool {
-        AXIsProcessTrusted()
+        if CGPreflightPostEventAccess() {
+            return true
+        }
+        return AXIsProcessTrusted()
     }
 
     /// 弹出系统权限请求弹窗（仅在未授权时有效）
     func requestAccessibilityIfNeeded() {
-        // 注意：使用 takeUnretainedValue() 避免重复 retain 导致野指针
+        // 发送键盘事件对应的是 PostEvent 权限；优先走该链路。
+        if CGPreflightPostEventAccess() {
+            return
+        }
+
+        if CGRequestPostEventAccess() {
+            return
+        }
+
+        // 兜底：某些系统版本下仍可能依赖 AX 提示。
         let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
         let options = [key: true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
@@ -379,8 +391,10 @@ final class AutoPasteManager {
     @discardableResult
     func performAutoPaste() -> Bool {
         // 权限不足时不执行
-        let trusted = AXIsProcessTrusted()
-        print("[AutoPaste] AXIsProcessTrusted = \(trusted)")
+        let postEventTrusted = CGPreflightPostEventAccess()
+        let axTrusted = AXIsProcessTrusted()
+        let trusted = postEventTrusted || axTrusted
+        print("[AutoPaste] PostEvent = \(postEventTrusted), AX = \(axTrusted)")
         guard trusted else { return false }
 
         // 优先使用追踪到的前台应用，否则从运行列表中查找
