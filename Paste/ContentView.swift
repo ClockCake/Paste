@@ -22,7 +22,9 @@ struct ContentView: View {
     @State private var isSearchExpanded = false
     @State private var searchText = ""
     @State private var showingHotkeySettings = false
-    @State private var showingAccessibilityAlert = false
+    #if os(macOS)
+    @State private var isAccessibilityGranted = AutoPasteManager.shared.isAccessibilityGranted
+    #endif
     @State private var selectedCardForDetail: ClipboardCard?
     @State private var nowTick = Date()
     @FocusState private var isSearchFocused: Bool
@@ -83,18 +85,6 @@ struct ContentView: View {
             Text(l.pastePermissionMessage)
         }
         #endif
-        #if os(macOS)
-        .alert(l.accessibilityPermissionTitle, isPresented: $showingAccessibilityAlert) {
-            Button(l.openSystemSettings) {
-                AutoPasteManager.shared.openAccessibilitySettings()
-            }
-            Button(l.cancel, role: .cancel) {
-                settings.autoPasteOnDoubleClick = false
-            }
-        } message: {
-            Text(l.accessibilityPermissionMessage)
-        }
-        #endif
         .task {
             selectedFilter = store.currentFilter
             selectedTimeFilter = store.currentTimeFilter
@@ -108,9 +98,7 @@ struct ContentView: View {
             #endif
             #if os(macOS)
             NSApp.appearance = settings.appearanceMode.nsAppearance
-            if settings.autoPasteOnDoubleClick {
-                ensureAccessibilityPermission(showFallbackAlert: false)
-            }
+            refreshAccessibilityPermissionState()
             #endif
         }
         .onChange(of: settings.appearanceMode) { newValue in
@@ -143,6 +131,11 @@ struct ContentView: View {
         .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { date in
             nowTick = date
         }
+        #if os(macOS)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshAccessibilityPermissionState()
+        }
+        #endif
         #if os(iOS)
         .sheet(item: $selectedCardForDetail) { card in
             ClipboardDetailSheet(card: card)
@@ -464,7 +457,7 @@ struct ContentView: View {
                     .environmentObject(settings)
             }
 
-            Toggle(isOn: $settings.autoPasteOnDoubleClick) {
+            Toggle(isOn: autoPasteToggleBinding) {
                 Label(l.autoPasteOnDoubleClick, systemImage: "command")
                     .labelStyle(.iconOnly)
                     .font(.title3)
@@ -473,11 +466,6 @@ struct ContentView: View {
             .toggleStyle(.switch)
             .controlSize(.small)
             .platformHelp(l.autoPasteOnDoubleClickHint)
-            .onChange(of: settings.autoPasteOnDoubleClick) { newValue in
-                if newValue {
-                    ensureAccessibilityPermission(showFallbackAlert: false)
-                }
-            }
             #endif
 
             Button(role: .destructive) {
@@ -740,7 +728,7 @@ struct ContentView: View {
                                 onCopy: { store.copy(card) },
                                 onDelete: { store.delete(card) },
                                 onToggleFavorite: { store.toggleFavorite(card) },
-                                onRequestAccessibility: { ensureAccessibilityPermission(showFallbackAlert: true) },
+                                onRequestAccessibility: { requestAccessibilityPermissionAndSyncState() },
                                 onOpenDetail: { selectedCardForDetail = card }
                             )
                             .environmentObject(store)
@@ -800,20 +788,37 @@ struct ContentView: View {
 
     // MARK: - 权限提示
 
-    private func ensureAccessibilityPermission(showFallbackAlert: Bool = false) {
+    private var autoPasteToggleBinding: Binding<Bool> {
         #if os(macOS)
-        guard !AutoPasteManager.shared.isAccessibilityGranted else { return }
-        // 调用系统 API 弹出权限请求对话框，系统会自动将 App 添加到辅助功能列表
-        // 并显示带有"打开系统设置"按钮的系统对话框
-        AutoPasteManager.shared.requestAccessibilityIfNeeded()
-        guard showFallbackAlert else { return }
-        // 延迟检查：给系统对话框足够时间显示和用户操作
-        // 如果用户关闭了系统对话框但仍未授权，再显示自定义提示作为备用
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [self] in
-            if !AutoPasteManager.shared.isAccessibilityGranted {
-                showingAccessibilityAlert = true
+        Binding(
+            get: { settings.autoPasteOnDoubleClick && isAccessibilityGranted },
+            set: { newValue in
+                if newValue {
+                    settings.autoPasteOnDoubleClick = true
+                    requestAccessibilityPermissionAndSyncState()
+                } else {
+                    settings.autoPasteOnDoubleClick = false
+                }
             }
+        )
+        #else
+        .constant(false)
+        #endif
+    }
+
+    private func requestAccessibilityPermissionAndSyncState() {
+        #if os(macOS)
+        AutoPasteManager.shared.requestAccessibilityIfNeeded()
+        refreshAccessibilityPermissionState()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            refreshAccessibilityPermissionState()
         }
+        #endif
+    }
+
+    private func refreshAccessibilityPermissionState() {
+        #if os(macOS)
+        isAccessibilityGranted = AutoPasteManager.shared.isAccessibilityGranted
         #endif
     }
 
@@ -902,6 +907,12 @@ private struct ClipboardCardView: View {
         #endif
     }
 
+    #if os(macOS)
+    private var isAutoPasteEnabled: Bool {
+        settings.autoPasteOnDoubleClick && AutoPasteManager.shared.isAccessibilityGranted
+    }
+    #endif
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             // 顶部：左边图标+程序名，右边删除按钮
@@ -961,10 +972,12 @@ private struct ClipboardCardView: View {
         .onTapGesture(count: 2) {
             onCopy()
             SoundManager.playCopySound()
-            if settings.autoPasteOnDoubleClick {
+            if isAutoPasteEnabled {
                 if !AutoPasteManager.shared.performAutoPaste() {
                     onRequestAccessibility()
                 }
+            } else if settings.autoPasteOnDoubleClick {
+                onRequestAccessibility()
             }
         }
         #else
@@ -1021,7 +1034,7 @@ private struct ClipboardCardView: View {
                 #if os(iOS)
                 return l.tapToViewDetail
                 #else
-                return settings.autoPasteOnDoubleClick ? l.doubleClickToPaste : l.clickToCopy
+                return isAutoPasteEnabled ? l.doubleClickToPaste : l.clickToCopy
                 #endif
             }()
         )
