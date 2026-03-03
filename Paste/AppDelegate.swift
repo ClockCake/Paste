@@ -77,9 +77,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.delegate = self
     }
 
-    /// 拦截窗口关闭按钮：隐藏窗口而不是销毁
+    /// 拦截窗口关闭按钮：隐藏窗口并收入状态栏（隐藏 Dock 图标）
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         sender.orderOut(nil)   // 仅隐藏，不销毁
+        NSApp.setActivationPolicy(.accessory)  // 隐藏 Dock 图标
         return false           // 阻止默认关闭行为
     }
 
@@ -276,6 +277,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// 从后台唤起主窗口到前台（无论窗口是被关闭、最小化、还是被遮挡）
     private func showWindowFromBackground() {
         AutoPasteManager.shared.captureFrontmostApp()
+
+        // 恢复 Dock 图标
+        NSApp.setActivationPolicy(.regular)
 
         // 先激活应用到前台（必须在操作窗口之前）
         if #available(macOS 14.0, *) {
