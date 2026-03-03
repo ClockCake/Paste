@@ -24,6 +24,7 @@ struct ContentView: View {
     @State private var showingHotkeySettings = false
     #if os(macOS)
     @State private var isAccessibilityGranted = AutoPasteManager.shared.isAccessibilityGranted
+    @State private var accessibilityPollTimer: Timer?
     #endif
     @State private var selectedCardForDetail: ClipboardCard?
     @State private var nowTick = Date()
@@ -810,17 +811,45 @@ struct ContentView: View {
         #if os(macOS)
         AutoPasteManager.shared.requestAccessibilityIfNeeded()
         refreshAccessibilityPermissionState()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-            refreshAccessibilityPermissionState()
-        }
+        startAccessibilityPolling()
         #endif
     }
 
     private func refreshAccessibilityPermissionState() {
         #if os(macOS)
-        isAccessibilityGranted = AutoPasteManager.shared.isAccessibilityGranted
+        let granted = AutoPasteManager.shared.isAccessibilityGranted
+        if granted != isAccessibilityGranted {
+            isAccessibilityGranted = granted
+        }
+        if granted {
+            stopAccessibilityPolling()
+        }
         #endif
     }
+
+    #if os(macOS)
+    /// 启动轮询定时器，持续检测辅助功能权限状态直到授权成功或超时
+    private func startAccessibilityPolling() {
+        stopAccessibilityPolling()
+        var elapsed: TimeInterval = 0
+        let interval: TimeInterval = 0.5
+        let timeout: TimeInterval = 60
+        accessibilityPollTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [self] timer in
+            elapsed += interval
+            Task { @MainActor in
+                refreshAccessibilityPermissionState()
+                if isAccessibilityGranted || elapsed >= timeout {
+                    timer.invalidate()
+                }
+            }
+        }
+    }
+
+    private func stopAccessibilityPolling() {
+        accessibilityPollTimer?.invalidate()
+        accessibilityPollTimer = nil
+    }
+    #endif
 
     #if os(iOS)
     private func openPastePermissionSettings() {
