@@ -396,6 +396,8 @@ final class ClipboardStore: ObservableObject {
                 #endif
             }
         }
+
+        bumpItemToFront(item)
     }
 
     func delete(_ card: ClipboardCard) {
@@ -771,6 +773,14 @@ final class ClipboardStore: ObservableObject {
         request.fetchLimit = 1
         request.predicate = NSPredicate(format: "id == %@", id as CVarArg)
         return try? context.fetch(request).first
+    }
+
+    private func bumpItemToFront(_ item: ClipboardItem) {
+        let now = Date()
+        item.createdAt = now
+        item.updatedAt = now
+        saveContext()
+        scheduleReload(ignoreRemoteMaintenance: true)
     }
 
     private func saveContext() {
