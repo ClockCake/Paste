@@ -377,12 +377,24 @@ final class PersistenceController {
 
         Self.logger.info("收到 CloudKit 远程变更通知: \(String(describing: ck.keys))")
 
-        // NSPersistentCloudKitContainer 会自动监听远程变更并同步
-        // 收到推送通知后，我们只需确保 viewContext 刷新即可
+        #if os(macOS)
+        // 避免在主线程对整个 viewContext 做 refreshAllObjects，
+        // 远程导入期间这会明显放大滚动卡顿。
+        container.viewContext.perform {
+            self.container.viewContext.processPendingChanges()
+        }
+        #else
         container.viewContext.refreshAllObjects()
+        #endif
 
         return true
     }
+
+    #if DEBUG
+    static func makeManagedObjectModelForTesting() -> NSManagedObjectModel {
+        makeManagedObjectModel()
+    }
+    #endif
 
     private static func makeManagedObjectModel() -> NSManagedObjectModel {
         let model = NSManagedObjectModel()

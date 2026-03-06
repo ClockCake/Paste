@@ -6,7 +6,7 @@ enum ClipboardEntryKind: String, CaseIterable {
     case url
     case image
 
-    var title: String {
+    nonisolated var title: String {
         switch self {
         case .text:
             return "Text"
@@ -17,7 +17,7 @@ enum ClipboardEntryKind: String, CaseIterable {
         }
     }
 
-    var symbolName: String {
+    nonisolated var symbolName: String {
         switch self {
         case .text:
             return "text.alignleft"
@@ -44,9 +44,9 @@ enum ClipboardFilter: String, CaseIterable, Identifiable {
     case url
     case image
 
-    var id: String { rawValue }
+    nonisolated var id: String { rawValue }
 
-    var title: String {
+    nonisolated var title: String {
         switch self {
         case .all:
             return "All"
@@ -61,7 +61,7 @@ enum ClipboardFilter: String, CaseIterable, Identifiable {
         }
     }
 
-    var kind: ClipboardEntryKind? {
+    nonisolated var kind: ClipboardEntryKind? {
         switch self {
         case .all, .favorites:
             return nil
@@ -74,7 +74,7 @@ enum ClipboardFilter: String, CaseIterable, Identifiable {
         }
     }
 
-    var isFavoritesFilter: Bool {
+    nonisolated var isFavoritesFilter: Bool {
         self == .favorites
     }
 
@@ -95,10 +95,10 @@ enum TimeFilter: String, CaseIterable, Identifiable {
     case sevenDays
     case thirtyDays
 
-    var id: String { rawValue }
+    nonisolated var id: String { rawValue }
 
     /// 返回筛选起始日期，nil 表示不限
-    var startDate: Date? {
+    nonisolated var startDate: Date? {
         let cal = Calendar.current
         let now = Date()
         switch self {
@@ -148,12 +148,12 @@ public final class ClipboardItem: NSManagedObject {
 extension ClipboardItem: Identifiable {}
 
 extension ClipboardItem {
-    var kind: ClipboardEntryKind {
+    nonisolated var kind: ClipboardEntryKind {
         get { ClipboardEntryKind(rawValue: kindRaw) ?? .text }
         set { kindRaw = newValue.rawValue }
     }
 
-    var previewText: String {
+    nonisolated var previewText: String {
         switch kind {
         case .text:
             return textContent ?? ""
@@ -164,7 +164,7 @@ extension ClipboardItem {
         }
     }
 
-    var storageBytes: Int64 {
+    nonisolated var storageBytes: Int64 {
         payloadBytes + thumbnailBytes
     }
 }

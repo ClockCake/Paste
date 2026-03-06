@@ -18,7 +18,7 @@ enum SmartContentType: Equatable {
 enum SmartContentDetector {
 
     /// 检测文本中的智能内容类型。仅当整段文本匹配时才返回对应类型。
-    static func detect(_ text: String) -> SmartContentType {
+    nonisolated static func detect(_ text: String) -> SmartContentType {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .none }
 
@@ -42,7 +42,7 @@ enum SmartContentDetector {
 
     // MARK: - 颜色检测
 
-    private static func detectColor(_ text: String) -> SmartContentType? {
+    nonisolated private static func detectColor(_ text: String) -> SmartContentType? {
         // Hex: #RGB, #RRGGBB, #RRGGBBAA
         if let color = parseHexColor(text) {
             return color
@@ -61,7 +61,7 @@ enum SmartContentDetector {
         return nil
     }
 
-    private static func parseHexColor(_ text: String) -> SmartContentType? {
+    nonisolated private static func parseHexColor(_ text: String) -> SmartContentType? {
         let pattern = #"^#([0-9A-Fa-f]{3,8})$"#
         guard let match = text.range(of: pattern, options: .regularExpression) else { return nil }
         let hex = String(text[match]).dropFirst() // 去掉 #
@@ -94,14 +94,14 @@ enum SmartContentDetector {
         return .color(red: r, green: g, blue: b, alpha: a)
     }
 
-    private static func hexVal(_ hex: Substring, offset: Int, length: Int) -> Double {
+    nonisolated private static func hexVal(_ hex: Substring, offset: Int, length: Int) -> Double {
         let start = hex.index(hex.startIndex, offsetBy: offset)
         let end = hex.index(start, offsetBy: length)
         let slice = String(hex[start..<end])
         return Double(UInt64(slice, radix: 16) ?? 0)
     }
 
-    private static func parseRGBColor(_ text: String) -> SmartContentType? {
+    nonisolated private static func parseRGBColor(_ text: String) -> SmartContentType? {
         // rgb(255, 87, 51) 或 rgba(255, 87, 51, 0.8)
         let pattern = #"^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,\s*([\d.]+)\s*)?\)$"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
@@ -128,7 +128,7 @@ enum SmartContentDetector {
         return .color(red: Double(rv) / 255.0, green: Double(gv) / 255.0, blue: Double(bv) / 255.0, alpha: a)
     }
 
-    private static func parseHSLColor(_ text: String) -> SmartContentType? {
+    nonisolated private static func parseHSLColor(_ text: String) -> SmartContentType? {
         // hsl(120, 100%, 50%) 或 hsla(120, 100%, 50%, 0.5)
         let pattern = #"^hsla?\(\s*(\d{1,3})\s*,\s*(\d{1,3})%\s*,\s*(\d{1,3})%\s*(?:,\s*([\d.]+)\s*)?\)$"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
@@ -158,7 +158,7 @@ enum SmartContentDetector {
     }
 
     /// HSL → RGB（h: 0~360, s/l: 0~1）
-    private static func hslToRGB(h: Double, s: Double, l: Double) -> (Double, Double, Double) {
+    nonisolated private static func hslToRGB(h: Double, s: Double, l: Double) -> (Double, Double, Double) {
         if s == 0 {
             return (l, l, l)
         }
@@ -183,7 +183,7 @@ enum SmartContentDetector {
 
     // MARK: - 电话号码检测
 
-    private static func detectPhoneNumber(_ text: String) -> Bool {
+    nonisolated private static func detectPhoneNumber(_ text: String) -> Bool {
         // 限制长度，避免长文误匹配
         guard text.count <= 30 else { return false }
 
@@ -200,7 +200,7 @@ enum SmartContentDetector {
 
     // MARK: - 邮箱检测
 
-    private static func detectEmail(_ text: String) -> Bool {
+    nonisolated private static func detectEmail(_ text: String) -> Bool {
         guard text.count <= 320 else { return false } // RFC 规定邮箱最长 320 字符
 
         let pattern = #"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$"#

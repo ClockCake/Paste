@@ -2,11 +2,197 @@ import Combine
 import CoreData
 import CryptoKit
 import Foundation
+import ImageIO
 #if os(macOS)
 import AppKit
 #elseif os(iOS)
 import UIKit
 #endif
+
+struct ClipboardSnapshot {
+    let cards: [ClipboardCard]
+    let totalItems: Int
+    let totalStorageBytes: Int64
+}
+
+enum ClipboardStorageOperations {
+    @discardableResult
+    nonisolated static func upsertItem(
+        payload: ClipboardPayload,
+        sourceApp: SourceApplicationInfo,
+        at timestamp: Date = Date(),
+        in context: NSManagedObjectContext
+    ) throws -> (item: ClipboardItem, removedThumbnailKeys: [String]) {
+        let request = ClipboardItem.fetchRequest()
+        request.predicate = NSPredicate(format: "contentHash == %@", payload.contentHash)
+
+        let existingItems = try context.fetch(request)
+        let removedThumbnailKeys = existingItems.compactMap { $0.thumbnailKey }
+        existingItems.forEach(context.delete)
+
+        let item = ClipboardItem(context: context)
+        item.id = UUID()
+        item.contentHash = payload.contentHash
+        item.createdAt = timestamp
+        item.updatedAt = timestamp
+        item.kind = payload.kind
+        item.textContent = payload.text
+        item.urlString = payload.urlString
+        item.imageData = payload.imageData
+        item.sourceAppName = sourceApp.name
+        item.sourceBundleID = sourceApp.bundleID
+        item.payloadBytes = payload.payloadBytes
+        item.thumbnailKey = nil
+        item.thumbnailBytes = 0
+
+        return (item, removedThumbnailKeys)
+    }
+
+    nonisolated static func deduplicateItemsByContentHash(in context: NSManagedObjectContext) throws -> [String] {
+        let request = ClipboardItem.fetchRequest()
+        request.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: false)]
+
+        let allItems = try context.fetch(request)
+        guard !allItems.isEmpty else { return [] }
+
+        var groups: [String: [ClipboardItem]] = [:]
+        for item in allItems {
+            let hash = item.contentHash
+            guard !hash.isEmpty else { continue }
+            groups[hash, default: []].append(item)
+        }
+
+        var removedThumbnailKeys: [String] = []
+        for (_, items) in groups where items.count > 1 {
+            let keeper: ClipboardItem
+            if let realSource = items.first(where: isRealSource(_:)) {
+                keeper = realSource
+            } else {
+                keeper = items[0]
+            }
+
+            for item in items where item !== keeper {
+                if let key = item.thumbnailKey {
+                    removedThumbnailKeys.append(key)
+                }
+                context.delete(item)
+            }
+        }
+
+        return removedThumbnailKeys
+    }
+
+    nonisolated static func makeSnapshot(
+        in context: NSManagedObjectContext,
+        filter: ClipboardFilter,
+        searchText: String,
+        timeFilter: TimeFilter
+    ) -> ClipboardSnapshot {
+        let request = makeCardsRequest(
+            filter: filter,
+            searchText: searchText,
+            timeFilter: timeFilter
+        )
+
+        guard let fetched = try? context.fetch(request) else {
+            return ClipboardSnapshot(cards: [], totalItems: 0, totalStorageBytes: 0)
+        }
+
+        let cards = fetched.map { item in
+            var imageWidth: Int?
+            var imageHeight: Int?
+            if item.kind == .image, let imageData = item.imageData,
+               let size = imagePixelSize(from: imageData)
+            {
+                imageWidth = size.width
+                imageHeight = size.height
+            }
+
+            let smartType: SmartContentType = (item.kind == .text)
+                ? SmartContentDetector.detect(item.previewText)
+                : .none
+
+            return ClipboardCard(
+                id: item.id,
+                kind: item.kind,
+                createdAt: item.createdAt,
+                sourceAppName: item.sourceAppName ?? "Unknown",
+                sourceBundleID: item.sourceBundleID ?? "unknown.bundle",
+                previewText: item.previewText,
+                thumbnailKey: item.thumbnailKey,
+                isFavorite: item.isFavorite,
+                characterCount: item.previewText.count,
+                imageWidth: imageWidth,
+                imageHeight: imageHeight,
+                smartContentType: smartType
+            )
+        }
+
+        let totalsRequest = ClipboardItem.fetchRequest()
+        let totals = (try? context.fetch(totalsRequest)) ?? []
+
+        return ClipboardSnapshot(
+            cards: cards,
+            totalItems: totals.count,
+            totalStorageBytes: totals.reduce(0) { $0 + $1.storageBytes }
+        )
+    }
+
+    nonisolated private static func makeCardsRequest(
+        filter: ClipboardFilter,
+        searchText: String,
+        timeFilter: TimeFilter
+    ) -> NSFetchRequest<ClipboardItem> {
+        let request = ClipboardItem.fetchRequest()
+        request.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: false)]
+
+        var predicates: [NSPredicate] = []
+
+        if filter.isFavoritesFilter {
+            predicates.append(NSPredicate(format: "isFavorite == true"))
+        }
+
+        if let kind = filter.kind {
+            predicates.append(NSPredicate(format: "kindRaw == %@", kind.rawValue))
+        }
+
+        if !searchText.isEmpty {
+            let searchPredicate = NSPredicate(
+                format: "textContent CONTAINS[cd] %@ OR urlString CONTAINS[cd] %@",
+                searchText, searchText
+            )
+            predicates.append(searchPredicate)
+        }
+
+        if let startDate = timeFilter.startDate {
+            predicates.append(NSPredicate(format: "createdAt >= %@", startDate as NSDate))
+        }
+
+        if !predicates.isEmpty {
+            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
+        }
+
+        return request
+    }
+
+    nonisolated private static func imagePixelSize(from data: Data) -> (width: Int, height: Int)? {
+        guard
+            let source = CGImageSourceCreateWithData(data as CFData, nil),
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+            let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+            let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue
+        else {
+            return nil
+        }
+
+        return (width, height)
+    }
+
+    nonisolated private static func isRealSource(_ item: ClipboardItem) -> Bool {
+        let bundleID = item.sourceBundleID ?? ""
+        return !bundleID.isEmpty && bundleID != "system.pasteboard" && bundleID != "unknown.bundle"
+    }
+}
 
 @MainActor
 final class ClipboardStore: ObservableObject {
@@ -32,8 +218,14 @@ final class ClipboardStore: ObservableObject {
     private var monitor: ClipboardMonitor?
     private var observers: [NSObjectProtocol] = []
     private var started = false
-    private var reloadScheduled = false
-    private var needsGlobalDedup = true
+    private var reloadWorkItem: DispatchWorkItem?
+    private var reloadGeneration: UInt64 = 0
+    #if os(macOS)
+    private var remoteMaintenanceWorkItem: DispatchWorkItem?
+    private var remoteMaintenancePending = false
+    private var remoteMaintenanceInFlight = false
+    private var remoteMaintenanceQueued = false
+    #endif
     #if os(iOS)
     private var iosAutoImportTimer: Timer?
     private var lastObservedPasteboardChangeCount: Int?
@@ -50,12 +242,21 @@ final class ClipboardStore: ObservableObject {
         lastSuccessfulCloudSyncDate = syncSnapshot.lastSuccessfulSyncDate
 
         registerObservers()
-        reloadCards()
+        scheduleReload(delay: 0, ignoreRemoteMaintenance: true)
+        #if os(macOS)
+        if cloudSyncEnabled {
+            scheduleRemoteMaintenance()
+        }
+        #endif
     }
 
     deinit {
         let center = NotificationCenter.default
         observers.forEach(center.removeObserver)
+        reloadWorkItem?.cancel()
+        #if os(macOS)
+        remoteMaintenanceWorkItem?.cancel()
+        #endif
         #if os(iOS)
         iosAutoImportTimer?.invalidate()
         #endif
@@ -80,20 +281,20 @@ final class ClipboardStore: ObservableObject {
     func updateFilter(_ newFilter: ClipboardFilter) {
         guard filter != newFilter else { return }
         filter = newFilter
-        scheduleReload()
+        scheduleReload(ignoreRemoteMaintenance: true)
     }
 
     func updateSearch(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         guard searchText != trimmed else { return }
         searchText = trimmed
-        scheduleReload()
+        scheduleReload(ignoreRemoteMaintenance: true)
     }
 
     func updateTimeFilter(_ newFilter: TimeFilter) {
         guard timeFilter != newFilter else { return }
         timeFilter = newFilter
-        scheduleReload()
+        scheduleReload(ignoreRemoteMaintenance: true)
     }
 
     func start() {
@@ -203,14 +404,14 @@ final class ClipboardStore: ObservableObject {
         thumbnailCache.removeThumbnail(forKey: item.thumbnailKey)
         context.delete(item)
         saveContext()
-        scheduleReload()
+        scheduleReload(ignoreRemoteMaintenance: true)
     }
 
     func toggleFavorite(_ card: ClipboardCard) {
         guard let item = fetchItem(id: card.id) else { return }
         item.isFavorite.toggle()
         saveContext()
-        scheduleReload()
+        scheduleReload(ignoreRemoteMaintenance: true)
     }
 
     func clearAll() {
@@ -223,7 +424,7 @@ final class ClipboardStore: ObservableObject {
         }
 
         saveContext()
-        scheduleReload()
+        scheduleReload(ignoreRemoteMaintenance: true)
     }
 
     #if os(iOS)
@@ -288,20 +489,26 @@ final class ClipboardStore: ObservableObject {
             object: context,
             queue: .main
         ) { [weak self] _ in
-            // 延迟执行避免在视图更新期间发布变更
             DispatchQueue.main.async { [weak self] in
-                self?.scheduleReload()
+                guard let self else { return }
+                #if os(macOS)
+                guard !self.remoteMaintenancePending else { return }
+                #endif
+                self.scheduleReload(delay: self.currentReloadDelay())
             }
         }
 
         let remoteObserver = center.addObserver(
             forName: .NSPersistentStoreRemoteChange,
             object: persistence.container.persistentStoreCoordinator,
-            queue: .main
+            queue: nil
         ) { [weak self] _ in
             DispatchQueue.main.async { [weak self] in
-                self?.needsGlobalDedup = true
-                self?.scheduleReload()
+                #if os(macOS)
+                self?.scheduleRemoteMaintenance()
+                #else
+                self?.scheduleReload(delay: 0.2)
+                #endif
             }
         }
 
@@ -442,57 +649,40 @@ final class ClipboardStore: ObservableObject {
     #endif
 
     private func save(payload: ClipboardPayload, sourceApp: SourceApplicationInfo, playFeedback: Bool = true) {
-        let now = Date()
-        let request = ClipboardItem.fetchRequest()
-        request.predicate = NSPredicate(format: "contentHash == %@", payload.contentHash)
+        do {
+            let (item, removedThumbnailKeys) = try ClipboardStorageOperations.upsertItem(
+                payload: payload,
+                sourceApp: sourceApp,
+                in: context
+            )
+            removedThumbnailKeys.forEach(thumbnailCache.removeThumbnail(forKey:))
 
-        // 去重：如果已存在相同内容，先删除旧条目，再新建
-        // 这样新条目的 createdAt 一定是最新的，排序一定在最前面
-        if let existingItems = try? context.fetch(request), !existingItems.isEmpty {
-            existingItems.forEach { existing in
-                thumbnailCache.removeThumbnail(forKey: existing.thumbnailKey)
-                context.delete(existing)
-            }
-        }
-
-        let item = ClipboardItem(context: context)
-        item.id = UUID()
-        item.contentHash = payload.contentHash
-
-        item.createdAt = now
-        item.updatedAt = now
-        item.kind = payload.kind
-        item.textContent = payload.text
-        item.urlString = payload.urlString
-        item.imageData = payload.imageData
-        item.sourceAppName = sourceApp.name
-        item.sourceBundleID = sourceApp.bundleID
-        item.payloadBytes = payload.payloadBytes
-
-        if item.kind == .image {
-            let key = payload.contentHash
-            item.thumbnailKey = key
-            if
-                let imageData = payload.imageData,
-                let thumbnailData = ImageCoder.thumbnailJPEGData(from: imageData)
-            {
-                item.thumbnailBytes = thumbnailCache.storeThumbnail(thumbnailData, forKey: key)
+            if item.kind == .image {
+                let key = payload.contentHash
+                item.thumbnailKey = key
+                if
+                    let imageData = payload.imageData,
+                    let thumbnailData = ImageCoder.thumbnailJPEGData(from: imageData)
+                {
+                    item.thumbnailBytes = thumbnailCache.storeThumbnail(thumbnailData, forKey: key)
+                } else {
+                    item.thumbnailBytes = 0
+                }
             } else {
+                item.thumbnailKey = nil
                 item.thumbnailBytes = 0
+                item.imageData = nil
             }
-        } else {
-            item.thumbnailKey = nil
-            item.thumbnailBytes = 0
-            item.imageData = nil
-        }
 
-        saveContext()
-        pruneIfNeeded()
-        scheduleReload()
+            saveContext()
+            pruneIfNeeded()
+            scheduleReload(ignoreRemoteMaintenance: true)
 
-        if playFeedback {
-            // 全局复制时播放音效
-            SoundManager.playCopySound()
+            if playFeedback {
+                SoundManager.playCopySound()
+            }
+        } catch {
+            return
         }
     }
 
@@ -519,97 +709,61 @@ final class ClipboardStore: ObservableObject {
         }
     }
 
-    private func reloadCards() {
-        if needsGlobalDedup {
-            deduplicateByContentHash()
-            needsGlobalDedup = false
-        }
+    private func reloadCards(
+        generation: UInt64,
+        filter: ClipboardFilter,
+        searchText: String,
+        timeFilter: TimeFilter
+    ) {
+        let backgroundContext = persistence.container.newBackgroundContext()
+        backgroundContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        backgroundContext.undoManager = nil
 
-        let request = ClipboardItem.fetchRequest()
-        request.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: false)]
-
-        // 构建筛选条件
-        var predicates: [NSPredicate] = []
-
-        if filter.isFavoritesFilter {
-            predicates.append(NSPredicate(format: "isFavorite == true"))
-        }
-
-        if let kind = filter.kind {
-            predicates.append(NSPredicate(format: "kindRaw == %@", kind.rawValue))
-        }
-
-        // 搜索条件：匹配文本内容或 URL
-        if !searchText.isEmpty {
-            let searchPredicate = NSPredicate(
-                format: "textContent CONTAINS[cd] %@ OR urlString CONTAINS[cd] %@",
-                searchText, searchText
+        backgroundContext.perform { [weak self] in
+            let snapshot = ClipboardStorageOperations.makeSnapshot(
+                in: backgroundContext,
+                filter: filter,
+                searchText: searchText,
+                timeFilter: timeFilter
             )
-            predicates.append(searchPredicate)
-        }
 
-        // 时间筛选
-        if let startDate = timeFilter.startDate {
-            predicates.append(NSPredicate(format: "createdAt >= %@", startDate as NSDate))
-        }
-
-        if !predicates.isEmpty {
-            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
-        }
-
-        guard let fetched = try? context.fetch(request) else {
-            cards = []
-            totalItems = 0
-            totalStorageBytes = 0
-            return
-        }
-
-        cards = fetched.map { item in
-            // 计算图片尺寸
-            var imageWidth: Int?
-            var imageHeight: Int?
-            if item.kind == .image, let imageData = item.imageData, let image = PlatformImage(data: imageData) {
-                imageWidth = Int(image.size.width)
-                imageHeight = Int(image.size.height)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                guard generation == self.reloadGeneration else { return }
+                self.cards = snapshot.cards
+                self.totalItems = snapshot.totalItems
+                self.totalStorageBytes = snapshot.totalStorageBytes
             }
-
-            // 智能内容识别（仅文本类型）
-            let smartType: SmartContentType = (item.kind == .text)
-                ? SmartContentDetector.detect(item.previewText)
-                : .none
-
-            return ClipboardCard(
-                id: item.id,
-                kind: item.kind,
-                createdAt: item.createdAt,
-                sourceAppName: item.sourceAppName ?? "Unknown",
-                sourceBundleID: item.sourceBundleID ?? "unknown.bundle",
-                previewText: item.previewText,
-                thumbnailKey: item.thumbnailKey,
-                isFavorite: item.isFavorite,
-                characterCount: item.previewText.count,
-                imageWidth: imageWidth,
-                imageHeight: imageHeight,
-                smartContentType: smartType
-            )
-        }
-
-        let totalsRequest = ClipboardItem.fetchRequest()
-        if let allItems = try? context.fetch(totalsRequest) {
-            totalItems = allItems.count
-            totalStorageBytes = allItems.reduce(0) { $0 + $1.storageBytes }
         }
     }
 
-    private func scheduleReload() {
-        guard !reloadScheduled else { return }
-        reloadScheduled = true
-        // 使用下一次 RunLoop，避免视图更新期间发布变更
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.reloadScheduled = false
-            self.reloadCards()
+    private func scheduleReload(delay: TimeInterval = 0.05, ignoreRemoteMaintenance: Bool = false) {
+        #if os(macOS)
+        guard ignoreRemoteMaintenance || !remoteMaintenancePending else { return }
+        #endif
+
+        reloadWorkItem?.cancel()
+
+        let generation = reloadGeneration &+ 1
+        reloadGeneration = generation
+        let filter = self.filter
+        let searchText = self.searchText
+        let timeFilter = self.timeFilter
+
+        let work = DispatchWorkItem { [weak self] in
+            self?.reloadCards(
+                generation: generation,
+                filter: filter,
+                searchText: searchText,
+                timeFilter: timeFilter
+            )
         }
+        reloadWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    private func currentReloadDelay() -> TimeInterval {
+        cloudSyncInProgress ? 0.25 : 0.05
     }
 
     private func fetchItem(id: UUID) -> ClipboardItem? {
@@ -624,43 +778,70 @@ final class ClipboardStore: ObservableObject {
         try? context.save()
     }
 
-    private func deduplicateByContentHash() {
-        let request = ClipboardItem.fetchRequest()
-        request.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: false)]
-        guard let allItems = try? context.fetch(request), !allItems.isEmpty else { return }
+    #if os(macOS)
+    private func scheduleRemoteMaintenance() {
+        remoteMaintenancePending = true
 
-        // 按 contentHash 分组
-        var groups: [String: [ClipboardItem]] = [:]
-        for item in allItems {
-            let hash = item.contentHash
-            guard !hash.isEmpty else { continue }
-            groups[hash, default: []].append(item)
+        if remoteMaintenanceInFlight {
+            remoteMaintenanceQueued = true
+            return
         }
 
-        var didDelete = false
-        for (_, items) in groups where items.count > 1 {
-            // 优先保留有真实来源的条目（非 system.pasteboard / unknown.bundle）
-            let keeper: ClipboardItem
-            if let realSource = items.first(where: {
-                let bid = $0.sourceBundleID ?? ""
-                return !bid.isEmpty && bid != "system.pasteboard" && bid != "unknown.bundle"
-            }) {
-                keeper = realSource
-            } else {
-                keeper = items[0] // 都没有真实来源，保留最新的
-            }
+        remoteMaintenanceWorkItem?.cancel()
 
-            for item in items where item !== keeper {
-                thumbnailCache.removeThumbnail(forKey: item.thumbnailKey)
-                context.delete(item)
-                didDelete = true
-            }
+        let work = DispatchWorkItem { [weak self] in
+            self?.performRemoteMaintenance()
+        }
+        remoteMaintenanceWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+    }
+
+    private func performRemoteMaintenance() {
+        remoteMaintenanceWorkItem = nil
+        guard !remoteMaintenanceInFlight else {
+            remoteMaintenanceQueued = true
+            return
         }
 
-        if didDelete {
-            saveContext()
+        remoteMaintenanceInFlight = true
+
+        let backgroundContext = persistence.container.newBackgroundContext()
+        backgroundContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        backgroundContext.undoManager = nil
+        let thumbnailCache = thumbnailCache
+
+        backgroundContext.perform { [weak self] in
+            var didSave = false
+            var removedThumbnailKeys: [String] = []
+
+            do {
+                removedThumbnailKeys = try ClipboardStorageOperations.deduplicateItemsByContentHash(in: backgroundContext)
+                if backgroundContext.hasChanges {
+                    try backgroundContext.save()
+                    didSave = true
+                }
+            } catch {
+                didSave = false
+            }
+
+            removedThumbnailKeys.forEach(thumbnailCache.removeThumbnail(forKey:))
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.remoteMaintenanceInFlight = false
+
+                if self.remoteMaintenanceQueued {
+                    self.remoteMaintenanceQueued = false
+                    self.scheduleRemoteMaintenance()
+                    return
+                }
+
+                self.remoteMaintenancePending = false
+                self.scheduleReload(delay: didSave ? 0.02 : 0.1, ignoreRemoteMaintenance: true)
+            }
         }
     }
+    #endif
 
     private func contentHash(kind: ClipboardEntryKind, payload: Data) -> String {
         var input = Data(kind.rawValue.utf8)
