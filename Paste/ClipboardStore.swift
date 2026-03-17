@@ -86,12 +86,16 @@ enum ClipboardStorageOperations {
         in context: NSManagedObjectContext,
         filter: ClipboardFilter,
         searchText: String,
-        timeFilter: TimeFilter
+        timeFilter: TimeFilter,
+        customDateFrom: Date? = nil,
+        customDateTo: Date? = nil
     ) -> ClipboardSnapshot {
         let request = makeCardsRequest(
             filter: filter,
             searchText: searchText,
-            timeFilter: timeFilter
+            timeFilter: timeFilter,
+            customDateFrom: customDateFrom,
+            customDateTo: customDateTo
         )
 
         guard let fetched = try? context.fetch(request) else {
@@ -141,7 +145,9 @@ enum ClipboardStorageOperations {
     nonisolated private static func makeCardsRequest(
         filter: ClipboardFilter,
         searchText: String,
-        timeFilter: TimeFilter
+        timeFilter: TimeFilter,
+        customDateFrom: Date? = nil,
+        customDateTo: Date? = nil
     ) -> NSFetchRequest<ClipboardItem> {
         let request = ClipboardItem.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: false)]
@@ -164,7 +170,18 @@ enum ClipboardStorageOperations {
             predicates.append(searchPredicate)
         }
 
-        if let startDate = timeFilter.startDate {
+        if timeFilter == .customRange {
+            // 自定义日期范围
+            if let from = customDateFrom {
+                let startOfFrom = Calendar.current.startOfDay(for: from)
+                predicates.append(NSPredicate(format: "createdAt >= %@", startOfFrom as NSDate))
+            }
+            if let to = customDateTo {
+                // 结束日期包含当天，所以取下一天的起始
+                let nextDay = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: to))!
+                predicates.append(NSPredicate(format: "createdAt < %@", nextDay as NSDate))
+            }
+        } else if let startDate = timeFilter.startDate {
             predicates.append(NSPredicate(format: "createdAt >= %@", startDate as NSDate))
         }
 
@@ -199,6 +216,8 @@ final class ClipboardStore: ObservableObject {
     private var filter: ClipboardFilter = .all
     private var searchText: String = ""
     private var timeFilter: TimeFilter = .all
+    private var customDateFrom: Date?
+    private var customDateTo: Date?
 
     @Published private(set) var cards: [ClipboardCard] = []
     @Published private(set) var totalItems: Int = 0
@@ -278,6 +297,14 @@ final class ClipboardStore: ObservableObject {
         timeFilter
     }
 
+    var currentCustomDateFrom: Date? {
+        customDateFrom
+    }
+
+    var currentCustomDateTo: Date? {
+        customDateTo
+    }
+
     func updateFilter(_ newFilter: ClipboardFilter) {
         guard filter != newFilter else { return }
         filter = newFilter
@@ -294,7 +321,54 @@ final class ClipboardStore: ObservableObject {
     func updateTimeFilter(_ newFilter: TimeFilter) {
         guard timeFilter != newFilter else { return }
         timeFilter = newFilter
+        if newFilter != .customRange {
+            customDateFrom = nil
+            customDateTo = nil
+        }
         scheduleReload(ignoreRemoteMaintenance: true)
+    }
+
+    /// 设置自定义日期范围并切换到 customRange 筛选模式
+    func updateCustomDateRange(from: Date, to: Date) {
+        customDateFrom = from
+        customDateTo = to
+        timeFilter = .customRange
+        scheduleReload(ignoreRemoteMaintenance: true)
+    }
+
+    /// 按日期范围批量删除记录，返回删除的记录数
+    @discardableResult
+    func deleteByDateRange(from startDate: Date, to endDate: Date) -> Int {
+        let request = ClipboardItem.fetchRequest()
+        let calendar = Calendar.current
+        let adjustedStart = calendar.startOfDay(for: startDate)
+        let adjustedEnd = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: endDate))!
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            NSPredicate(format: "createdAt >= %@", adjustedStart as NSDate),
+            NSPredicate(format: "createdAt < %@", adjustedEnd as NSDate)
+        ])
+        guard let items = try? context.fetch(request) else { return 0 }
+        let count = items.count
+        items.forEach { item in
+            thumbnailCache.removeThumbnail(forKey: item.thumbnailKey)
+            context.delete(item)
+        }
+        saveContext()
+        scheduleReload(ignoreRemoteMaintenance: true)
+        return count
+    }
+
+    /// 统计指定日期范围内的记录数
+    func countByDateRange(from startDate: Date, to endDate: Date) -> Int {
+        let request = ClipboardItem.fetchRequest()
+        let calendar = Calendar.current
+        let adjustedStart = calendar.startOfDay(for: startDate)
+        let adjustedEnd = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: endDate))!
+        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            NSPredicate(format: "createdAt >= %@", adjustedStart as NSDate),
+            NSPredicate(format: "createdAt < %@", adjustedEnd as NSDate)
+        ])
+        return (try? context.count(for: request)) ?? 0
     }
 
     func start() {
@@ -715,7 +789,9 @@ final class ClipboardStore: ObservableObject {
         generation: UInt64,
         filter: ClipboardFilter,
         searchText: String,
-        timeFilter: TimeFilter
+        timeFilter: TimeFilter,
+        customDateFrom: Date?,
+        customDateTo: Date?
     ) {
         let backgroundContext = persistence.container.newBackgroundContext()
         backgroundContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
@@ -726,7 +802,9 @@ final class ClipboardStore: ObservableObject {
                 in: backgroundContext,
                 filter: filter,
                 searchText: searchText,
-                timeFilter: timeFilter
+                timeFilter: timeFilter,
+                customDateFrom: customDateFrom,
+                customDateTo: customDateTo
             )
 
             DispatchQueue.main.async { [weak self] in
@@ -751,13 +829,17 @@ final class ClipboardStore: ObservableObject {
         let filter = self.filter
         let searchText = self.searchText
         let timeFilter = self.timeFilter
+        let customDateFrom = self.customDateFrom
+        let customDateTo = self.customDateTo
 
         let work = DispatchWorkItem { [weak self] in
             self?.reloadCards(
                 generation: generation,
                 filter: filter,
                 searchText: searchText,
-                timeFilter: timeFilter
+                timeFilter: timeFilter,
+                customDateFrom: customDateFrom,
+                customDateTo: customDateTo
             )
         }
         reloadWorkItem = work

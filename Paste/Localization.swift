@@ -223,6 +223,31 @@ struct L {
     var timeFilterToday: String { lang == .zh ? "今天" : "Today" }
     var timeFilter7Days: String { lang == .zh ? "最近 7 天" : "Last 7 Days" }
     var timeFilter30Days: String { lang == .zh ? "最近 30 天" : "Last 30 Days" }
+    var timeFilterCustom: String { lang == .zh ? "自定义日期" : "Custom Date" }
+
+    // 日历选择器 & 批量删除
+    var deleteByDate: String { lang == .zh ? "按日期删除" : "Delete by Date" }
+    var selectDateRange: String { lang == .zh ? "选择日期范围" : "Select Date Range" }
+    var startDate: String { lang == .zh ? "开始日期" : "Start Date" }
+    var endDate: String { lang == .zh ? "结束日期" : "End Date" }
+    var applyFilter: String { lang == .zh ? "应用筛选" : "Apply" }
+    var deleteConfirmByDate: String {
+        lang == .zh ? "确定删除所选日期范围的记录？" : "Delete records in selected date range?"
+    }
+    func deleteConfirmByDateMessage(_ count: Int) -> String {
+        lang == .zh ? "将删除 \(count) 条记录，此操作不可撤销。" : "Will delete \(count) records. This cannot be undone."
+    }
+    var noRecordsInRange: String {
+        lang == .zh ? "所选日期范围内没有记录" : "No records in selected range"
+    }
+    func customDateRangeLabel(from: Date, to: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = lang == .zh ? "M月d日" : "MMM d"
+        return "\(formatter.string(from: from)) ~ \(formatter.string(from: to))"
+    }
+    func deleteSuccess(_ count: Int) -> String {
+        lang == .zh ? "已删除 \(count) 条记录" : "Deleted \(count) records"
+    }
 
     // 快捷键设置
     var hotkeyTitle: String { lang == .zh ? "全局快捷键" : "Global Hotkey" }

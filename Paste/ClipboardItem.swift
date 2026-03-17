@@ -89,20 +89,27 @@ enum ClipboardFilter: String, CaseIterable, Identifiable {
     }
 }
 
-enum TimeFilter: String, CaseIterable, Identifiable {
+enum TimeFilter: String, Identifiable, CaseIterable {
     case all
     case today
     case sevenDays
     case thirtyDays
+    case customRange
 
     nonisolated var id: String { rawValue }
 
+    /// 预设筛选项（不包含 customRange，customRange 由 UI 单独处理）
+    static var presetCases: [TimeFilter] {
+        [.all, .today, .sevenDays, .thirtyDays]
+    }
+
     /// 返回筛选起始日期，nil 表示不限
+    /// customRange 的实际日期由 ClipboardStore 单独管理
     nonisolated var startDate: Date? {
         let cal = Calendar.current
         let now = Date()
         switch self {
-        case .all:
+        case .all, .customRange:
             return nil
         case .today:
             return cal.startOfDay(for: now)
@@ -119,6 +126,7 @@ enum TimeFilter: String, CaseIterable, Identifiable {
         case .today: return l.timeFilterToday
         case .sevenDays: return l.timeFilter7Days
         case .thirtyDays: return l.timeFilter30Days
+        case .customRange: return l.timeFilterCustom
         }
     }
 }

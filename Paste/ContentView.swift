@@ -23,6 +23,8 @@ struct ContentView: View {
     @State private var searchText = ""
     @State private var showingHotkeySettings = false
     #if os(macOS)
+    @State private var showingDeleteByDateSheet = false
+    @State private var showingCustomDateFilter = false
     @State private var isAccessibilityGranted = AutoPasteManager.shared.isAccessibilityGranted
     @State private var accessibilityPollTimer: Timer?
     #endif
@@ -467,6 +469,29 @@ struct ContentView: View {
             .toggleStyle(.switch)
             .controlSize(.small)
             .platformHelp(l.autoPasteOnDoubleClickHint)
+
+            Divider()
+                .frame(height: 18)
+
+            // 按日期删除
+            Button {
+                showingDeleteByDateSheet.toggle()
+            } label: {
+                Image(systemName: "calendar.badge.minus")
+                    .font(.title3)
+                    .symbolRenderingMode(.hierarchical)
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .platformHelp(l.deleteByDate)
+            .popover(isPresented: $showingDeleteByDateSheet, arrowEdge: .bottom) {
+                DatePickerSheet(
+                    isPresented: $showingDeleteByDateSheet,
+                    mode: .delete
+                )
+                .environmentObject(store)
+                .environmentObject(settings)
+            }
             #endif
 
             Button(role: .destructive) {
@@ -510,7 +535,7 @@ struct ContentView: View {
                 .buttonStyle(.bordered)
 
                 Menu {
-                    ForEach(TimeFilter.allCases) { tf in
+                    ForEach(TimeFilter.presetCases) { tf in
                         Button {
                             selectedTimeFilter = tf
                         } label: {
@@ -609,7 +634,7 @@ struct ContentView: View {
             // 时间筛选和搜索
             HStack(spacing: 8) {
                 Menu {
-                    ForEach(TimeFilter.allCases) { tf in
+                    ForEach(TimeFilter.presetCases) { tf in
                         Button {
                             selectedTimeFilter = tf
                         } label: {
@@ -620,10 +645,27 @@ struct ContentView: View {
                             }
                         }
                     }
+
+                    Divider()
+
+                    Button {
+                        showingCustomDateFilter = true
+                    } label: {
+                        if selectedTimeFilter == .customRange {
+                            Label(l.timeFilterCustom, systemImage: "checkmark")
+                        } else {
+                            Text(l.timeFilterCustom)
+                        }
+                    }
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "calendar")
-                        if selectedTimeFilter != .all {
+                        if selectedTimeFilter == .customRange,
+                           let from = store.currentCustomDateFrom,
+                           let to = store.currentCustomDateTo {
+                            Text(l.customDateRangeLabel(from: from, to: to))
+                                .font(.caption)
+                        } else if selectedTimeFilter != .all {
                             Text(selectedTimeFilter.localizedTitle(l))
                                 .font(.caption)
                         }
@@ -634,6 +676,18 @@ struct ContentView: View {
                     .contentShape(Rectangle())
                 }
                 .macOSBorderlessMenuStyle()
+                .popover(isPresented: $showingCustomDateFilter, arrowEdge: .bottom) {
+                    DatePickerSheet(
+                        isPresented: $showingCustomDateFilter,
+                        mode: .filter,
+                        onApplyFilter: { from, to in
+                            store.updateCustomDateRange(from: from, to: to)
+                            selectedTimeFilter = .customRange
+                        }
+                    )
+                    .environmentObject(store)
+                    .environmentObject(settings)
+                }
 
                 if isSearchExpanded {
                     TextField(l.searchPlaceholder, text: $searchText)
