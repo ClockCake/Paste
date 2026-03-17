@@ -249,6 +249,29 @@ struct L {
         lang == .zh ? "已删除 \(count) 条记录" : "Deleted \(count) records"
     }
 
+    // 快捷删除选项
+    var deleteManage: String { lang == .zh ? "删除管理" : "Delete" }
+    var deleteBeforeWeek: String { lang == .zh ? "一周前的记录" : "Before 1 Week" }
+    var deleteBeforeHalfMonth: String { lang == .zh ? "半个月前的记录" : "Before 15 Days" }
+    var deleteBeforeMonth: String { lang == .zh ? "一个月前的记录" : "Before 1 Month" }
+    var deleteBefore3Months: String { lang == .zh ? "三个月前的记录" : "Before 3 Months" }
+    func deleteBeforeConfirm(_ label: String, _ count: Int) -> String {
+        lang == .zh ? "确定删除\(label)？共 \(count) 条记录，此操作不可撤销。"
+                    : "Delete \(label)? \(count) records will be removed. This cannot be undone."
+    }
+
+    // 选择文本
+    var selectText: String { lang == .zh ? "选择文本" : "Select Text" }
+    var textContent: String { lang == .zh ? "文本内容" : "Text Content" }
+    var done: String { lang == .zh ? "完成" : "Done" }
+
+    // 设置页面
+    var settings: String { lang == .zh ? "设置" : "Settings" }
+    var generalSection: String { lang == .zh ? "通用" : "General" }
+    var clipboardSection: String { lang == .zh ? "剪贴板" : "Clipboard" }
+    var syncSection: String { lang == .zh ? "同步" : "Sync" }
+    var openURLOnDoubleClick: String { lang == .zh ? "双击 URL 自动打开浏览器" : "Open URL in browser on double-click" }
+
     // 快捷键设置
     var hotkeyTitle: String { lang == .zh ? "全局快捷键" : "Global Hotkey" }
 

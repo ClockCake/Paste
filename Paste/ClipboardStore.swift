@@ -371,6 +371,29 @@ final class ClipboardStore: ObservableObject {
         return (try? context.count(for: request)) ?? 0
     }
 
+    /// 删除指定日期之前的所有记录，返回删除数量
+    @discardableResult
+    func deleteRecordsBefore(date: Date) -> Int {
+        let request = ClipboardItem.fetchRequest()
+        request.predicate = NSPredicate(format: "createdAt < %@", date as NSDate)
+        guard let items = try? context.fetch(request) else { return 0 }
+        let count = items.count
+        items.forEach { item in
+            thumbnailCache.removeThumbnail(forKey: item.thumbnailKey)
+            context.delete(item)
+        }
+        saveContext()
+        scheduleReload(ignoreRemoteMaintenance: true)
+        return count
+    }
+
+    /// 统计指定日期之前的记录数
+    func countRecordsBefore(date: Date) -> Int {
+        let request = ClipboardItem.fetchRequest()
+        request.predicate = NSPredicate(format: "createdAt < %@", date as NSDate)
+        return (try? context.count(for: request)) ?? 0
+    }
+
     func start() {
         guard !started else { return }
         started = true

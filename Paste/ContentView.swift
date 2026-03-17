@@ -21,10 +21,15 @@ struct ContentView: View {
     @State private var selectedTimeFilter: TimeFilter = .all
     @State private var isSearchExpanded = false
     @State private var searchText = ""
-    @State private var showingHotkeySettings = false
     #if os(macOS)
+    @State private var showingSettings = false
+    @State private var settingsViewId = UUID()
     @State private var showingDeleteByDateSheet = false
     @State private var showingCustomDateFilter = false
+    @State private var showingDeleteBeforeAlert = false
+    @State private var deleteBeforeLabel = ""
+    @State private var deleteBeforeDate = Date()
+    @State private var deleteBeforeCount = 0
     @State private var isAccessibilityGranted = AutoPasteManager.shared.isAccessibilityGranted
     @State private var accessibilityPollTimer: Timer?
     #endif
@@ -86,6 +91,11 @@ struct ContentView: View {
             Button(l.cancel, role: .cancel) {}
         } message: {
             Text(l.pastePermissionMessage)
+        }
+        #endif
+        #if os(macOS)
+        .onChange(of: settings.iCloudSyncPreference) { _ in
+            applyICloudSyncPreferenceChange()
         }
         #endif
         .task {
@@ -386,104 +396,93 @@ struct ContentView: View {
         }
         #else
         HStack(spacing: 8) {
-            Menu {
-                ForEach(AppearanceMode.allCases) { mode in
-                    Button {
-                        settings.appearanceMode = mode
-                    } label: {
-                        if settings.appearanceMode == mode {
-                            Label(settings.appearanceDisplayName(mode), systemImage: "checkmark")
-                        } else {
-                            Text(settings.appearanceDisplayName(mode))
-                        }
-                    }
-                }
-            } label: {
-                Image(systemName: appearanceIcon)
-                    .font(.title3)
-                    .symbolRenderingMode(.hierarchical)
-                    .frame(width: 28, height: 28)
-            }
-            .macOSBorderlessMenuStyle()
-            .platformHelp(l.appearance)
-
-            Menu {
-                ForEach(AppLanguage.allCases) { lang in
-                    Button {
-                        settings.appLanguage = lang
-                    } label: {
-                        if settings.appLanguage == lang {
-                            Label(lang.displayName, systemImage: "checkmark")
-                        } else {
-                            Text(lang.displayName)
-                        }
-                    }
-                }
-            } label: {
-                Image(systemName: "globe")
-                    .font(.title3)
-                    .symbolRenderingMode(.hierarchical)
-                    .frame(width: 28, height: 28)
-            }
-            .macOSBorderlessMenuStyle()
-            .platformHelp(l.language)
-
-            Toggle(isOn: $settings.iCloudSyncPreference) {
-                Image(systemName: settings.iCloudSyncPreference ? "icloud.fill" : "icloud.slash")
-                    .font(.title3)
-                    .symbolRenderingMode(.hierarchical)
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .platformHelp(l.iCloudSync)
-            .onChange(of: settings.iCloudSyncPreference) { _ in
-                applyICloudSyncPreferenceChange()
-            }
-
             #if os(macOS)
-            Divider()
-                .frame(height: 18)
-
-            // 快捷键设置
+            // 设置按钮
             Button {
-                showingHotkeySettings.toggle()
+                showingSettings.toggle()
             } label: {
-                Image(systemName: "keyboard")
+                Image(systemName: "gearshape")
                     .font(.title3)
                     .symbolRenderingMode(.hierarchical)
                     .frame(width: 28, height: 28)
             }
             .buttonStyle(.plain)
-            .platformHelp(l.hotkeySettings)
-            .popover(isPresented: $showingHotkeySettings, arrowEdge: .bottom) {
-                HotkeySettingsView()
+            .platformHelp(l.settings)
+            .popover(isPresented: $showingSettings, arrowEdge: .bottom) {
+                SettingsView(isPresented: $showingSettings)
                     .environmentObject(settings)
+                    .id(settingsViewId)
             }
-
-            Toggle(isOn: autoPasteToggleBinding) {
-                Label(l.autoPasteOnDoubleClick, systemImage: "command")
-                    .labelStyle(.iconOnly)
-                    .font(.title3)
-                    .symbolRenderingMode(.hierarchical)
+            .onChange(of: showingSettings) { newValue in
+                if newValue {
+                    settingsViewId = UUID()
+                }
             }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .platformHelp(l.autoPasteOnDoubleClickHint)
+            #endif
 
-            Divider()
-                .frame(height: 18)
+            // 删除管理菜单
+            Menu {
+                #if os(macOS)
+                // 快捷删除选项
+                Button {
+                    prepareDeleteBefore(label: l.deleteBeforeWeek, days: 7)
+                } label: {
+                    Label(l.deleteBeforeWeek, systemImage: "clock.badge.xmark")
+                }
 
-            // 按日期删除
-            Button {
-                showingDeleteByDateSheet.toggle()
+                Button {
+                    prepareDeleteBefore(label: l.deleteBeforeHalfMonth, days: 15)
+                } label: {
+                    Label(l.deleteBeforeHalfMonth, systemImage: "clock.badge.xmark")
+                }
+
+                Button {
+                    prepareDeleteBefore(label: l.deleteBeforeMonth, days: 30)
+                } label: {
+                    Label(l.deleteBeforeMonth, systemImage: "clock.badge.xmark")
+                }
+
+                Button {
+                    prepareDeleteBefore(label: l.deleteBefore3Months, days: 90)
+                } label: {
+                    Label(l.deleteBefore3Months, systemImage: "clock.badge.xmark")
+                }
+
+                Divider()
+
+                // 按日期删除
+                Button {
+                    showingDeleteByDateSheet = true
+                } label: {
+                    Label(l.deleteByDate, systemImage: "calendar.badge.minus")
+                }
+
+                Divider()
+                #endif
+
+                // 清除全部
+                Button(role: .destructive) {
+                    showingClearAllAlert = true
+                } label: {
+                    Label(l.clearAll, systemImage: "trash")
+                }
             } label: {
-                Image(systemName: "calendar.badge.minus")
+                #if os(iOS)
+                Image(systemName: "trash")
+                    .font(.body.weight(.semibold))
+                    .frame(width: 36, height: 36)
+                #else
+                Image(systemName: "trash")
                     .font(.title3)
                     .symbolRenderingMode(.hierarchical)
                     .frame(width: 28, height: 28)
+                #endif
             }
-            .buttonStyle(.plain)
-            .platformHelp(l.deleteByDate)
+            #if os(iOS)
+            .buttonStyle(.bordered)
+            #else
+            .macOSBorderlessMenuStyle()
+            .platformHelp(l.deleteManage)
             .popover(isPresented: $showingDeleteByDateSheet, arrowEdge: .bottom) {
                 DatePickerSheet(
                     isPresented: $showingDeleteByDateSheet,
@@ -493,14 +492,18 @@ struct ContentView: View {
                 .environmentObject(settings)
             }
             #endif
-
-            Button(role: .destructive) {
-                showingClearAllAlert = true
-            } label: {
-                Label(l.clearAll, systemImage: "trash")
-            }
             .disabled(store.totalItems == 0)
         }
+        #if os(macOS)
+        .alert(l.deleteManage, isPresented: $showingDeleteBeforeAlert) {
+            Button(l.cancel, role: .cancel) {}
+            Button(l.delete, role: .destructive) {
+                store.deleteRecordsBefore(date: deleteBeforeDate)
+            }
+        } message: {
+            Text(l.deleteBeforeConfirm(deleteBeforeLabel, deleteBeforeCount))
+        }
+        #endif
         #endif
     }
 
@@ -903,6 +906,16 @@ struct ContentView: View {
         accessibilityPollTimer?.invalidate()
         accessibilityPollTimer = nil
     }
+
+    /// 快捷删除：准备删除指定天数之前的记录
+    private func prepareDeleteBefore(label: String, days: Int) {
+        let date = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
+        let count = store.countRecordsBefore(date: date)
+        deleteBeforeLabel = label
+        deleteBeforeDate = date
+        deleteBeforeCount = count
+        showingDeleteBeforeAlert = true
+    }
     #endif
 
     #if os(iOS)
@@ -1053,6 +1066,14 @@ private struct ClipboardCardView: View {
         .contentShape(Rectangle())
         #if os(macOS)
         .onTapGesture(count: 2) {
+            // URL 类型：如果开启了自动打开浏览器，则打开 URL
+            if card.kind == .url && settings.openURLOnDoubleClick {
+                if let url = URL(string: card.previewText) {
+                    NSWorkspace.shared.open(url)
+                }
+                return
+            }
+            // 其他类型：复制并可选自动粘贴
             onCopy()
             SoundManager.playCopySound()
             if isAutoPasteEnabled {
@@ -1133,6 +1154,9 @@ private struct ClipboardCardView: View {
                 .font(.body)
                 .lineLimit(3)
                 .foregroundStyle(.blue)
+                #if os(macOS)
+                .textSelection(.enabled)
+                #endif
         case .image:
             CachedThumbnailView(key: card.thumbnailKey)
                 .environmentObject(store)
@@ -1165,6 +1189,9 @@ private struct ClipboardCardView: View {
             Text(card.previewText)
                 .font(.body)
                 .lineLimit(defaultTextLineLimit)
+                #if os(macOS)
+                .textSelection(.enabled)
+                #endif
         }
     }
 
@@ -1220,6 +1247,9 @@ private struct ClipboardCardView: View {
                 .lineLimit(3)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
+                #if os(macOS)
+                .textSelection(.enabled)
+                #endif
         }
         .frame(maxWidth: .infinity, minHeight: 80)
     }

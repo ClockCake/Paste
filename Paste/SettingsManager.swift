@@ -52,6 +52,9 @@ final class SettingsManager: ObservableObject {
     @AppStorage("autoPasteOnDoubleClick") var autoPasteOnDoubleClick: Bool = false {
         willSet { objectWillChange.send() }
     }
+    @AppStorage("openURLOnDoubleClick") var openURLOnDoubleClick: Bool = false {
+        willSet { objectWillChange.send() }
+    }
 
     var l: L {
         L(lang: appLanguage.resolved)
