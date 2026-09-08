@@ -67,3 +67,6 @@ DerivedData/
 
 # Plans
 plans/
+
+# macOS
+.DS_Store

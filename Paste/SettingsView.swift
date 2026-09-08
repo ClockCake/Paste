@@ -1,27 +1,23 @@
 import SwiftUI
 
-/// 设置页面（仅 macOS 端使用）
+/// 设置页面
 /// 将工具栏中的各种设置选项集中在此页面
-#if os(macOS)
 struct SettingsView: View {
     @EnvironmentObject private var settings: SettingsManager
+    @ObservedObject private var autoPaste = AutoPasteManager.shared
     @Binding var isPresented: Bool
 
     @State private var showingHotkeySettings = false
-    @State private var isAccessibilityGranted = AutoPasteManager.shared.isAccessibilityGranted
-    @State private var accessibilityPollTimer: Timer?
 
     private var l: L { settings.l }
 
     private var autoPasteBinding: Binding<Bool> {
         Binding(
-            get: { settings.autoPasteOnDoubleClick && isAccessibilityGranted },
+            get: { settings.autoPasteOnDoubleClick && autoPaste.isAccessibilityGranted },
             set: { newValue in
                 if newValue {
                     settings.autoPasteOnDoubleClick = true
-                    AutoPasteManager.shared.requestAccessibilityIfNeeded()
-                    refreshAccessibility()
-                    startAccessibilityPolling()
+                    autoPaste.requestAccessibilityIfNeeded()
                 } else {
                     settings.autoPasteOnDoubleClick = false
                 }
@@ -129,8 +125,7 @@ struct SettingsView: View {
         }
         .frame(width: 340, height: 420)
         .onDisappear {
-            accessibilityPollTimer?.invalidate()
-            accessibilityPollTimer = nil
+            autoPaste.stopAccessibilityPolling()
         }
     }
 
@@ -153,25 +148,4 @@ struct SettingsView: View {
             }
         }
     }
-
-    // MARK: - 辅助权限
-
-    private func refreshAccessibility() {
-        isAccessibilityGranted = AutoPasteManager.shared.isAccessibilityGranted
-    }
-
-    private func startAccessibilityPolling() {
-        accessibilityPollTimer?.invalidate()
-        accessibilityPollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            let granted = AutoPasteManager.shared.isAccessibilityGranted
-            if granted != isAccessibilityGranted {
-                isAccessibilityGranted = granted
-            }
-            if granted {
-                accessibilityPollTimer?.invalidate()
-                accessibilityPollTimer = nil
-            }
-        }
-    }
 }
-#endif

@@ -3,11 +3,7 @@ import CoreData
 import CryptoKit
 import Foundation
 import ImageIO
-#if os(macOS)
 import AppKit
-#elseif os(iOS)
-import UIKit
-#endif
 
 struct ClipboardSnapshot {
     let cards: [ClipboardCard]
@@ -28,6 +24,8 @@ enum ClipboardStorageOperations {
 
         let existingItems = try context.fetch(request)
         let removedThumbnailKeys = existingItems.compactMap { $0.thumbnailKey }
+        // 同内容的旧条目会被删掉重建，收藏标记要跟着带过来，否则重复复制一次收藏就丢了
+        let inheritedFavorite = existingItems.contains { $0.isFavorite }
         existingItems.forEach(context.delete)
 
         let item = ClipboardItem(context: context)
@@ -44,6 +42,7 @@ enum ClipboardStorageOperations {
         item.payloadBytes = payload.payloadBytes
         item.thumbnailKey = nil
         item.thumbnailBytes = 0
+        item.isFavorite = inheritedFavorite
 
         return (item, removedThumbnailKeys)
     }
@@ -64,12 +63,10 @@ enum ClipboardStorageOperations {
 
         var removedThumbnailKeys: [String] = []
         for (_, items) in groups where items.count > 1 {
-            let keeper: ClipboardItem
-            if let realSource = items.first(where: isRealSource(_:)) {
-                keeper = realSource
-            } else {
-                keeper = items[0]
-            }
+            // 收藏项优先保留；同为收藏或同为非收藏时，再按“来源真实”择优
+            let favorites = items.filter { $0.isFavorite }
+            let candidates = favorites.isEmpty ? items : favorites
+            let keeper = candidates.first(where: isRealSource(_:)) ?? candidates[0]
 
             for item in items where item !== keeper {
                 if let key = item.thumbnailKey {
@@ -80,6 +77,37 @@ enum ClipboardStorageOperations {
         }
 
         return removedThumbnailKeys
+    }
+
+    /// 批量删除永不涉及收藏项：收藏的记录只能在卡片上逐条删除。
+    /// 所有批量删除入口都必须经由这里取待删条目，规则只在此处定义一次
+    nonisolated static var excludeFavoritesPredicate: NSPredicate {
+        NSPredicate(format: "isFavorite == false")
+    }
+
+    /// 取出符合条件且可被批量删除的条目（自动排除收藏项）
+    nonisolated static func itemsForBulkDeletion(
+        matching predicate: NSPredicate?,
+        in context: NSManagedObjectContext
+    ) -> [ClipboardItem] {
+        let request = ClipboardItem.fetchRequest()
+        request.predicate = bulkDeletionPredicate(combining: predicate)
+        return (try? context.fetch(request)) ?? []
+    }
+
+    /// 统计符合条件且可被批量删除的条目数（自动排除收藏项）
+    nonisolated static func bulkDeletionCount(
+        matching predicate: NSPredicate?,
+        in context: NSManagedObjectContext
+    ) -> Int {
+        let request = ClipboardItem.fetchRequest()
+        request.predicate = bulkDeletionPredicate(combining: predicate)
+        return (try? context.count(for: request)) ?? 0
+    }
+
+    nonisolated static func bulkDeletionPredicate(combining predicate: NSPredicate?) -> NSPredicate {
+        guard let predicate else { return excludeFavoritesPredicate }
+        return NSCompoundPredicate(andPredicateWithSubpredicates: [predicate, excludeFavoritesPredicate])
     }
 
     nonisolated static func makeSnapshot(
@@ -239,16 +267,10 @@ final class ClipboardStore: ObservableObject {
     private var started = false
     private var reloadWorkItem: DispatchWorkItem?
     private var reloadGeneration: UInt64 = 0
-    #if os(macOS)
     private var remoteMaintenanceWorkItem: DispatchWorkItem?
     private var remoteMaintenancePending = false
     private var remoteMaintenanceInFlight = false
     private var remoteMaintenanceQueued = false
-    #endif
-    #if os(iOS)
-    private var iosAutoImportTimer: Timer?
-    private var lastObservedPasteboardChangeCount: Int?
-    #endif
 
     init(persistence: PersistenceController) {
         self.persistence = persistence
@@ -262,23 +284,16 @@ final class ClipboardStore: ObservableObject {
 
         registerObservers()
         scheduleReload(delay: 0, ignoreRemoteMaintenance: true)
-        #if os(macOS)
         if cloudSyncEnabled {
             scheduleRemoteMaintenance()
         }
-        #endif
     }
 
     deinit {
         let center = NotificationCenter.default
         observers.forEach(center.removeObserver)
         reloadWorkItem?.cancel()
-        #if os(macOS)
         remoteMaintenanceWorkItem?.cancel()
-        #endif
-        #if os(iOS)
-        iosAutoImportTimer?.invalidate()
-        #endif
     }
 
     var storageText: String {
@@ -336,62 +351,57 @@ final class ClipboardStore: ObservableObject {
         scheduleReload(ignoreRemoteMaintenance: true)
     }
 
-    /// 按日期范围批量删除记录，返回删除的记录数
+    /// 按日期范围批量删除记录，返回删除的记录数（不含收藏项）
     @discardableResult
     func deleteByDateRange(from startDate: Date, to endDate: Date) -> Int {
-        let request = ClipboardItem.fetchRequest()
-        let calendar = Calendar.current
-        let adjustedStart = calendar.startOfDay(for: startDate)
-        let adjustedEnd = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: endDate))!
-        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
-            NSPredicate(format: "createdAt >= %@", adjustedStart as NSDate),
-            NSPredicate(format: "createdAt < %@", adjustedEnd as NSDate)
-        ])
-        guard let items = try? context.fetch(request) else { return 0 }
-        let count = items.count
-        items.forEach { item in
-            thumbnailCache.removeThumbnail(forKey: item.thumbnailKey)
-            context.delete(item)
-        }
-        saveContext()
-        scheduleReload(ignoreRemoteMaintenance: true)
-        return count
+        performBulkDeletion(matching: Self.dateRangePredicate(from: startDate, to: endDate))
     }
 
-    /// 统计指定日期范围内的记录数
+    /// 统计指定日期范围内可批量删除的记录数（不含收藏项）
     func countByDateRange(from startDate: Date, to endDate: Date) -> Int {
-        let request = ClipboardItem.fetchRequest()
-        let calendar = Calendar.current
-        let adjustedStart = calendar.startOfDay(for: startDate)
-        let adjustedEnd = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: endDate))!
-        request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
-            NSPredicate(format: "createdAt >= %@", adjustedStart as NSDate),
-            NSPredicate(format: "createdAt < %@", adjustedEnd as NSDate)
-        ])
-        return (try? context.count(for: request)) ?? 0
+        ClipboardStorageOperations.bulkDeletionCount(
+            matching: Self.dateRangePredicate(from: startDate, to: endDate),
+            in: context
+        )
     }
 
-    /// 删除指定日期之前的所有记录，返回删除数量
+    /// 删除指定日期之前的记录，返回删除数量（不含收藏项）
     @discardableResult
     func deleteRecordsBefore(date: Date) -> Int {
-        let request = ClipboardItem.fetchRequest()
-        request.predicate = NSPredicate(format: "createdAt < %@", date as NSDate)
-        guard let items = try? context.fetch(request) else { return 0 }
-        let count = items.count
+        performBulkDeletion(matching: NSPredicate(format: "createdAt < %@", date as NSDate))
+    }
+
+    /// 统计指定日期之前可批量删除的记录数（不含收藏项）
+    func countRecordsBefore(date: Date) -> Int {
+        ClipboardStorageOperations.bulkDeletionCount(
+            matching: NSPredicate(format: "createdAt < %@", date as NSDate),
+            in: context
+        )
+    }
+
+    private static func dateRangePredicate(from startDate: Date, to endDate: Date) -> NSPredicate {
+        let calendar = Calendar.current
+        let adjustedStart = calendar.startOfDay(for: startDate)
+        let adjustedEnd = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: endDate))!
+        return NSCompoundPredicate(andPredicateWithSubpredicates: [
+            NSPredicate(format: "createdAt >= %@", adjustedStart as NSDate),
+            NSPredicate(format: "createdAt < %@", adjustedEnd as NSDate)
+        ])
+    }
+
+    /// 所有批量删除的统一出口，收藏项由 ClipboardStorageOperations 排除
+    @discardableResult
+    private func performBulkDeletion(matching predicate: NSPredicate?) -> Int {
+        let items = ClipboardStorageOperations.itemsForBulkDeletion(matching: predicate, in: context)
+        guard !items.isEmpty else { return 0 }
+
         items.forEach { item in
             thumbnailCache.removeThumbnail(forKey: item.thumbnailKey)
             context.delete(item)
         }
         saveContext()
         scheduleReload(ignoreRemoteMaintenance: true)
-        return count
-    }
-
-    /// 统计指定日期之前的记录数
-    func countRecordsBefore(date: Date) -> Int {
-        let request = ClipboardItem.fetchRequest()
-        request.predicate = NSPredicate(format: "createdAt < %@", date as NSDate)
-        return (try? context.count(for: request)) ?? 0
+        return items.count
     }
 
     func start() {
@@ -403,15 +413,9 @@ final class ClipboardStore: ObservableObject {
         }
         monitor.start()
         self.monitor = monitor
-        #if os(iOS)
-        startIOSAutoImport()
-        #endif
     }
 
     func stop() {
-        #if os(iOS)
-        stopIOSAutoImport()
-        #endif
         monitor?.stop()
         monitor = nil
         started = false
@@ -451,46 +455,25 @@ final class ClipboardStore: ObservableObject {
     func copy(_ card: ClipboardCard) {
         guard let item = fetchItem(id: card.id) else { return }
 
-        #if os(macOS)
         let pasteboard = NSPasteboard.general
         monitor?.skipNextCapture()
         pasteboard.clearContents()
-        #elseif os(iOS)
-        let pasteboard = UIPasteboard.general
-        #endif
 
         switch item.kind {
         case .text:
             if let text = item.textContent {
-                #if os(macOS)
                 pasteboard.setString(text, forType: .string)
-                #elseif os(iOS)
-                pasteboard.string = text
-                #endif
             }
         case .url:
             if let urlString = item.urlString, let url = URL(string: urlString) {
-                #if os(macOS)
                 pasteboard.writeObjects([url as NSURL])
                 pasteboard.setString(urlString, forType: .string)
-                #elseif os(iOS)
-                pasteboard.url = url
-                pasteboard.string = urlString
-                #endif
             } else if let urlString = item.urlString {
-                #if os(macOS)
                 pasteboard.setString(urlString, forType: .string)
-                #elseif os(iOS)
-                pasteboard.string = urlString
-                #endif
             }
         case .image:
             if let imageData = item.imageData, let image = PlatformImage(data: imageData) {
-                #if os(macOS)
                 pasteboard.writeObjects([image])
-                #elseif os(iOS)
-                pasteboard.image = image
-                #endif
             }
         }
 
@@ -513,72 +496,10 @@ final class ClipboardStore: ObservableObject {
         scheduleReload(ignoreRemoteMaintenance: true)
     }
 
+    /// 清除全部历史，收藏项保留
     func clearAll() {
-        let request = ClipboardItem.fetchRequest()
-        guard let allItems = try? context.fetch(request) else { return }
-
-        allItems.forEach { item in
-            thumbnailCache.removeThumbnail(forKey: item.thumbnailKey)
-            context.delete(item)
-        }
-
-        saveContext()
-        scheduleReload(ignoreRemoteMaintenance: true)
+        performBulkDeletion(matching: nil)
     }
-
-    #if os(iOS)
-    private func currentPasteboardPayload(from pasteboard: UIPasteboard) -> ClipboardPayload? {
-        if let imageData = ImageCoder.normalizedJPEGData(from: pasteboard) {
-            return ClipboardPayload(
-                kind: .image,
-                text: nil,
-                urlString: nil,
-                imageData: imageData,
-                contentHash: contentHash(kind: .image, payload: imageData),
-                payloadBytes: Int64(imageData.count)
-            )
-        }
-
-        if let url = pasteboard.url {
-            let urlString = url.absoluteString
-            return ClipboardPayload(
-                kind: .url,
-                text: nil,
-                urlString: urlString,
-                imageData: nil,
-                contentHash: contentHash(kind: .url, payload: Data(urlString.utf8)),
-                payloadBytes: Int64(urlString.utf8.count)
-            )
-        }
-
-        if
-            let text = pasteboard.string?.trimmingCharacters(in: .whitespacesAndNewlines),
-            !text.isEmpty
-        {
-            if let url = URL(string: text), url.scheme != nil {
-                return ClipboardPayload(
-                    kind: .url,
-                    text: nil,
-                    urlString: text,
-                    imageData: nil,
-                    contentHash: contentHash(kind: .url, payload: Data(text.utf8)),
-                    payloadBytes: Int64(text.utf8.count)
-                )
-            }
-
-            return ClipboardPayload(
-                kind: .text,
-                text: text,
-                urlString: nil,
-                imageData: nil,
-                contentHash: contentHash(kind: .text, payload: Data(text.utf8)),
-                payloadBytes: Int64(text.utf8.count)
-            )
-        }
-
-        return nil
-    }
-    #endif
 
     private func registerObservers() {
         let center = NotificationCenter.default
@@ -590,9 +511,7 @@ final class ClipboardStore: ObservableObject {
         ) { [weak self] _ in
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                #if os(macOS)
                 guard !self.remoteMaintenancePending else { return }
-                #endif
                 self.scheduleReload(delay: self.currentReloadDelay())
             }
         }
@@ -603,11 +522,7 @@ final class ClipboardStore: ObservableObject {
             queue: nil
         ) { [weak self] _ in
             DispatchQueue.main.async { [weak self] in
-                #if os(macOS)
                 self?.scheduleRemoteMaintenance()
-                #else
-                self?.scheduleReload(delay: 0.2)
-                #endif
             }
         }
 
@@ -621,40 +536,7 @@ final class ClipboardStore: ObservableObject {
             }
         }
 
-        var registeredObservers = [contextObserver, remoteObserver, cloudSyncStatusObserver]
-
-        #if os(iOS)
-        let didBecomeActiveObserver = center.addObserver(
-            forName: UIApplication.didBecomeActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.startIOSAutoImport()
-        }
-
-        let willResignActiveObserver = center.addObserver(
-            forName: UIApplication.willResignActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.stopIOSAutoImport()
-        }
-
-        let pasteboardChangedObserver = center.addObserver(
-            forName: UIPasteboard.changedNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            guard UIApplication.shared.applicationState == .active else { return }
-            self?.autoImportFromCurrentPasteboardIfNeeded()
-        }
-
-        registeredObservers.append(didBecomeActiveObserver)
-        registeredObservers.append(willResignActiveObserver)
-        registeredObservers.append(pasteboardChangedObserver)
-        #endif
-
-        observers = registeredObservers
+        observers = [contextObserver, remoteObserver, cloudSyncStatusObserver]
     }
 
     private func applyCloudSyncStatus(_ notification: Notification) {
@@ -678,74 +560,6 @@ final class ClipboardStore: ObservableObject {
             }
         }
     }
-
-    #if os(iOS)
-    private func startIOSAutoImport() {
-        guard UIApplication.shared.applicationState == .active else { return }
-        _ = autoImportFromCurrentPasteboardIfNeeded(force: lastObservedPasteboardChangeCount == nil)
-        guard iosAutoImportTimer == nil else { return }
-
-        let timer = Timer.scheduledTimer(withTimeInterval: 0.9, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.autoImportFromCurrentPasteboardIfNeeded()
-            }
-        }
-        timer.tolerance = 0.2
-        iosAutoImportTimer = timer
-    }
-
-    private func stopIOSAutoImport() {
-        iosAutoImportTimer?.invalidate()
-        iosAutoImportTimer = nil
-    }
-
-    @discardableResult
-    private func autoImportFromCurrentPasteboardIfNeeded(force: Bool = false) -> Bool {
-        let pasteboard = UIPasteboard.general
-        let currentChangeCount = pasteboard.changeCount
-        if !force, let lastObservedPasteboardChangeCount, lastObservedPasteboardChangeCount == currentChangeCount {
-            return false
-        }
-        lastObservedPasteboardChangeCount = currentChangeCount
-
-        guard let payload = currentPasteboardPayload(from: pasteboard) else {
-            return false
-        }
-
-        // 如果同内容已存在（无论来自 iCloud 同步还是本地），跳过不重复创建
-        let existingRequest = ClipboardItem.fetchRequest()
-        existingRequest.predicate = NSPredicate(format: "contentHash == %@", payload.contentHash)
-        if let existingItems = try? context.fetch(existingRequest), !existingItems.isEmpty {
-            return false
-        }
-
-        if cloudSyncEnabled {
-            // iCloud 同步启用时，延迟创建以等待 CloudKit 同步 Mac 端的真实条目
-            // Universal Clipboard 比 CloudKit 快得多，直接创建会导致来源显示为 "iOS Clipboard"
-            let hash = payload.contentHash
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-                guard let self else { return }
-                let check = ClipboardItem.fetchRequest()
-                check.predicate = NSPredicate(format: "contentHash == %@", hash)
-                if let existing = try? self.context.fetch(check), !existing.isEmpty {
-                    return // CloudKit 已同步真实条目，跳过本地创建
-                }
-                let source = SourceApplicationInfo(
-                    name: "iOS Clipboard",
-                    bundleID: "system.pasteboard"
-                )
-                self.save(payload: payload, sourceApp: source, playFeedback: false)
-            }
-        } else {
-            let source = SourceApplicationInfo(
-                name: "iOS Clipboard",
-                bundleID: "system.pasteboard"
-            )
-            save(payload: payload, sourceApp: source, playFeedback: false)
-        }
-        return true
-    }
-    #endif
 
     private func save(payload: ClipboardPayload, sourceApp: SourceApplicationInfo, playFeedback: Bool = true) {
         do {
@@ -785,6 +599,8 @@ final class ClipboardStore: ObservableObject {
         }
     }
 
+    /// 超出容量上限时按时间从旧到新清理。收藏项不参与清理，
+    /// 因此非收藏记录全部清完后仍可能超限——这是为保住收藏做的让步
     private func pruneIfNeeded() {
         let request = ClipboardItem.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: true)]
@@ -797,6 +613,7 @@ final class ClipboardStore: ObservableObject {
         var didDelete = false
 
         for item in allItems where currentBytes > maxStorageBytes {
+            guard !item.isFavorite else { continue }
             currentBytes -= item.storageBytes
             thumbnailCache.removeThumbnail(forKey: item.thumbnailKey)
             context.delete(item)
@@ -841,9 +658,7 @@ final class ClipboardStore: ObservableObject {
     }
 
     private func scheduleReload(delay: TimeInterval = 0.05, ignoreRemoteMaintenance: Bool = false) {
-        #if os(macOS)
         guard ignoreRemoteMaintenance || !remoteMaintenancePending else { return }
-        #endif
 
         reloadWorkItem?.cancel()
 
@@ -893,7 +708,6 @@ final class ClipboardStore: ObservableObject {
         try? context.save()
     }
 
-    #if os(macOS)
     private func scheduleRemoteMaintenance() {
         remoteMaintenancePending = true
 
@@ -956,7 +770,6 @@ final class ClipboardStore: ObservableObject {
             }
         }
     }
-    #endif
 
     private func contentHash(kind: ClipboardEntryKind, payload: Data) -> String {
         var input = Data(kind.rawValue.utf8)

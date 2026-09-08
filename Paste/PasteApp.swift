@@ -1,9 +1,6 @@
 import SwiftUI
 import CoreData
 import Combine
-#if os(iOS)
-import UIKit
-#endif
 
 @MainActor
 final class AppRuntime: ObservableObject {
@@ -27,11 +24,7 @@ final class AppRuntime: ObservableObject {
 
 @main
 struct PasteApp: App {
-    #if os(macOS)
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    #elseif os(iOS)
-    @UIApplicationDelegateAdaptor(IOSAppDelegate.self) private var appDelegate
-    #endif
     @StateObject private var runtime = AppRuntime()
 
     var body: some Scene {
@@ -43,35 +36,7 @@ struct PasteApp: App {
                 .environment(\.managedObjectContext, PersistenceController.shared.container.viewContext)
                 .preferredColorScheme(runtime.settings.appearanceMode.colorScheme)
         }
+        // 工具栏与标题栏合并为一行，给筛选和搜索留出横向空间
+        .windowToolbarStyle(.unified)
     }
 }
-
-#if os(iOS)
-final class IOSAppDelegate: NSObject, UIApplicationDelegate {
-    func application(
-        _ application: UIApplication,
-        didFailToRegisterForRemoteNotificationsWithError error: Error
-    ) {
-        #if DEBUG
-        print("Remote notification registration failed: \(error.localizedDescription)")
-        #endif
-    }
-
-    func application(
-        _ application: UIApplication,
-        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
-        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
-    ) {
-        let handled = PersistenceController.shared.handleRemoteNotification(userInfo)
-        completionHandler(handled ? .newData : .noData)
-    }
-
-    func application(
-        _ application: UIApplication,
-        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
-    ) -> Bool {
-        application.registerForRemoteNotifications()
-        return true
-    }
-}
-#endif

@@ -2,7 +2,6 @@ import SwiftUI
 
 /// 日期范围选择弹窗（仅 macOS 端使用）
 /// 支持两种模式：筛选模式（应用日期范围筛选）和删除模式（按日期范围批量删除）
-#if os(macOS)
 enum DatePickerMode {
     case filter   // 筛选模式
     case delete   // 删除模式
@@ -156,4 +155,3 @@ struct DatePickerSheet: View {
         }
     }
 }
-#endif

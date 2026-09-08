@@ -39,9 +39,6 @@ struct L {
 
     // 应用标题
     var appTitle: String { "Paste" }
-    var appSubtitle: String {
-        return lang == .zh ? "自动捕获剪贴板 · 支持 iCloud 同步" : "Auto capture clipboard with iCloud sync"
-    }
 
     // 统计信息
     func itemCount(_ count: Int) -> String {
@@ -90,39 +87,21 @@ struct L {
         lang == .zh ? "确定清除所有剪贴板历史？" : "Clear all clipboard history?"
     }
     var clearAllConfirmMessage: String {
-        lang == .zh ? "这将删除所有本地历史记录和缓存的缩略图。" : "This removes all local history and cached thumbnails."
+        lang == .zh
+            ? "这将删除所有本地历史记录和缓存的缩略图，收藏的记录会保留。"
+            : "This removes all local history and cached thumbnails. Favorites are kept."
     }
     var emptyStateTitle: String {
         lang == .zh ? "暂无剪贴板历史" : "No clipboard history yet"
     }
     var emptyStateSubtitle: String {
-        #if os(iOS)
-        return lang == .zh ? "可在 Mac 端复制后通过 iCloud 在此查看" : "Copy on Mac and view here via iCloud sync."
-        #else
         return lang == .zh ? "复制文本 / URL / 图片即可开始" : "Copy Text / URL / Image to start."
-        #endif
     }
     var clickToCopy: String {
-        #if os(iOS)
-        return lang == .zh ? "点击复制到剪贴板" : "Tap to copy"
-        #else
         return lang == .zh ? "双击复制到剪贴板" : "Double-click to copy"
-        #endif
-    }
-    var tapToViewDetail: String {
-        lang == .zh ? "点击查看详情" : "Tap to view details"
     }
     var doubleClickToPaste: String {
         lang == .zh ? "双击复制并自动粘贴" : "Double-click to copy and paste"
-    }
-    var detailTitle: String {
-        lang == .zh ? "内容详情" : "Details"
-    }
-    var openInBrowser: String {
-        lang == .zh ? "在浏览器中打开" : "Open in Browser"
-    }
-    var copiedSuccess: String {
-        lang == .zh ? "已复制到剪贴板" : "Copied to clipboard"
     }
     var manualImport: String {
         lang == .zh ? "导入剪贴板" : "Import Clipboard"
@@ -135,9 +114,6 @@ struct L {
     }
     var importNoContent: String {
         lang == .zh ? "当前剪贴板没有可导入内容" : "No importable clipboard content"
-    }
-    var tapToZoomImage: String {
-        lang == .zh ? "点按全屏查看，双击重置缩放" : "Tap for full screen, double-tap to reset zoom"
     }
 
     // 相对时间
@@ -152,7 +128,12 @@ struct L {
     func timeDaysAgo(_ days: Int) -> String {
         lang == .zh ? "\(days) 天前" : "\(days)d ago"
     }
-    func relativeTimeSince(_ date: Date, now: Date = Date()) -> String {
+    /// 相对时间描述。`fallbackToDateAfterDays` 指定超过多少天后改用具体日期（nil 表示一直用“x 天前”）
+    func relativeTimeSince(
+        _ date: Date,
+        now: Date = Date(),
+        fallbackToDateAfterDays: Int? = nil
+    ) -> String {
         let interval = now.timeIntervalSince(date)
         if interval < 60 {
             return timeJustNow
@@ -166,6 +147,9 @@ struct L {
             let days = max(Int(interval / 86400), 1)
             if days == 1 {
                 return timeYesterday
+            }
+            if let threshold = fallbackToDateAfterDays, days >= threshold {
+                return DayFormatter.string(from: date, lang: lang)
             }
             return timeDaysAgo(days)
         }
@@ -191,22 +175,8 @@ struct L {
             ? "自动粘贴功能需要\u{300C}辅助功能\u{300D}权限来模拟键盘输入。\n\n请前往「系统设置 → 隐私与安全性 → 辅助功能」，找到 Paste 并开启开关。\n如果列表中没有 Paste，请点击「+」按钮手动添加。"
             : "Auto paste needs Accessibility permission to simulate keyboard input.\n\nGo to System Settings → Privacy & Security → Accessibility, find Paste and enable the toggle.\nIf Paste is not listed, click the \"+\" button to add it manually."
     }
-    var openSystemSettings: String {
-        lang == .zh ? "打开系统设置" : "Open System Settings"
-    }
     var iCloudRestartHint: String {
         lang == .zh ? "切换后需要重启应用生效" : "Restart app to apply changes"
-    }
-    var pastePermissionTitle: String {
-        lang == .zh ? "剪贴板权限建议" : "Clipboard Permission"
-    }
-    var pastePermissionMessage: String {
-        lang == .zh
-            ? "为减少每次切回应用时的系统询问，请在设置中将 “Paste from Other Apps” 设为 “Allow”。"
-            : "To avoid repeated paste prompts when returning to the app, set “Paste from Other Apps” to “Allow” in Settings."
-    }
-    var pastePermissionSettings: String {
-        lang == .zh ? "Paste 权限设置" : "Paste Permission"
     }
     var appearanceSystem: String { lang == .zh ? "跟随系统" : "System" }
     var appearanceLight: String { lang == .zh ? "浅色" : "Light" }
@@ -214,11 +184,17 @@ struct L {
 
     // 搜索
     var search: String { lang == .zh ? "搜索" : "Search" }
+    var keyboardHint: String {
+        lang == .zh
+            ? "↩ 复制 · ⌘1–9 快捷复制 · ⌫ 删除 · ⌘F 搜索"
+            : "↩ Copy · ⌘1–9 Quick copy · ⌫ Delete · ⌘F Search"
+    }
     var searchPlaceholder: String { lang == .zh ? "搜索剪贴板内容…" : "Search clipboard..." }
     var noSearchResults: String { lang == .zh ? "无搜索结果" : "No results found" }
     var noSearchResultsHint: String { lang == .zh ? "尝试其他关键词" : "Try different keywords" }
 
     // 时间筛选
+    var timeFilterLabel: String { lang == .zh ? "按时间筛选" : "Filter by Time" }
     var timeFilterAll: String { lang == .zh ? "全部时间" : "All Time" }
     var timeFilterToday: String { lang == .zh ? "今天" : "Today" }
     var timeFilter7Days: String { lang == .zh ? "最近 7 天" : "Last 7 Days" }
@@ -235,10 +211,12 @@ struct L {
         lang == .zh ? "确定删除所选日期范围的记录？" : "Delete records in selected date range?"
     }
     func deleteConfirmByDateMessage(_ count: Int) -> String {
-        lang == .zh ? "将删除 \(count) 条记录，此操作不可撤销。" : "Will delete \(count) records. This cannot be undone."
+        lang == .zh
+            ? "将删除 \(count) 条记录（不含收藏），此操作不可撤销。"
+            : "Will delete \(count) records, excluding favorites. This cannot be undone."
     }
     var noRecordsInRange: String {
-        lang == .zh ? "所选日期范围内没有记录" : "No records in selected range"
+        lang == .zh ? "所选日期范围内没有可删除的记录" : "No deletable records in selected range"
     }
     func customDateRangeLabel(from: Date, to: Date) -> String {
         let formatter = DateFormatter()
@@ -256,8 +234,8 @@ struct L {
     var deleteBeforeMonth: String { lang == .zh ? "一个月前的记录" : "Before 1 Month" }
     var deleteBefore3Months: String { lang == .zh ? "三个月前的记录" : "Before 3 Months" }
     func deleteBeforeConfirm(_ label: String, _ count: Int) -> String {
-        lang == .zh ? "确定删除\(label)？共 \(count) 条记录，此操作不可撤销。"
-                    : "Delete \(label)? \(count) records will be removed. This cannot be undone."
+        lang == .zh ? "确定删除\(label)？共 \(count) 条记录（不含收藏），此操作不可撤销。"
+                    : "Delete \(label)? \(count) records will be removed, excluding favorites. This cannot be undone."
     }
 
     // 选择文本
@@ -292,4 +270,22 @@ struct L {
     var openWindow: String { lang == .zh ? "打开 Paste" : "Open Paste" }
     var showWindow: String { lang == .zh ? "显示窗口" : "Show Window" }
     var quit: String { lang == .zh ? "退出" : "Quit" }
+}
+
+// MARK: - 日期格式化
+
+/// 按语言缓存的 DateFormatter。DateFormatter 初始化昂贵，必须复用
+enum DayFormatter {
+    private static let zh: DateFormatter = make(format: "M月d日")
+    private static let en: DateFormatter = make(format: "MMM d")
+
+    static func string(from date: Date, lang: ResolvedLanguage) -> String {
+        (lang == .zh ? zh : en).string(from: date)
+    }
+
+    private static func make(format: String) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.dateFormat = format
+        return formatter
+    }
 }

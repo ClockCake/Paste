@@ -1,9 +1,5 @@
 import Foundation
-#if os(macOS)
 import AppKit
-#elseif os(iOS)
-import UIKit
-#endif
 
 final class ThumbnailCache {
     private let memoryCache = NSCache<NSString, PlatformImage>()

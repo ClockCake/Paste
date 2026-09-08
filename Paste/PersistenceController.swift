@@ -233,12 +233,6 @@ final class PersistenceController {
         }
         let bundleIdentifier = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines)
             ?? "com.dorado.paste"
-        if bundleIdentifier.lowercased().hasSuffix(".ios") {
-            let base = String(bundleIdentifier.dropLast(4))
-            if !base.isEmpty {
-                return "iCloud.\(base)"
-            }
-        }
         return "iCloud.\(bundleIdentifier)"
     }
 
@@ -377,15 +371,11 @@ final class PersistenceController {
 
         Self.logger.info("收到 CloudKit 远程变更通知: \(String(describing: ck.keys))")
 
-        #if os(macOS)
         // 避免在主线程对整个 viewContext 做 refreshAllObjects，
         // 远程导入期间这会明显放大滚动卡顿。
         container.viewContext.perform {
             self.container.viewContext.processPendingChanges()
         }
-        #else
-        container.viewContext.refreshAllObjects()
-        #endif
 
         return true
     }

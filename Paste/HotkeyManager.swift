@@ -1,4 +1,3 @@
-#if os(macOS)
 import AppKit
 import Carbon
 import Combine
@@ -121,7 +120,6 @@ final class HotkeyManager: ObservableObject {
         defaults.set(Int(config.modifiers), forKey: modifiersKey)
     }
 
-    
     private func clearDefaults() {
         let defaults = UserDefaults.standard
         defaults.removeObject(forKey: keyCodeKey)
@@ -234,4 +232,3 @@ private func keyCodeToString(_ keyCode: UInt16) -> String {
 
     return keyMap[keyCode] ?? "Key(\(keyCode))"
 }
-#endif

@@ -1,8 +1,6 @@
 import SwiftUI
 import Combine
-#if os(macOS)
 import AppKit
-#endif
 // MARK: - 外观模式
 
 enum AppearanceMode: String, CaseIterable, Identifiable, Sendable {
@@ -20,7 +18,6 @@ enum AppearanceMode: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    #if os(macOS)
     /// 对应的 NSAppearance，system 返回 nil 表示跟随系统
     var nsAppearance: NSAppearance? {
         switch self {
@@ -29,7 +26,6 @@ enum AppearanceMode: String, CaseIterable, Identifiable, Sendable {
         case .dark: return NSAppearance(named: .darkAqua)
         }
     }
-    #endif
 }
 
 // MARK: - 设置管理器

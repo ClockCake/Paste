@@ -1,6 +1,6 @@
-#if os(macOS)
 import AppKit
 import ApplicationServices
+import Combine
 import Foundation
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
@@ -324,11 +324,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 // MARK: - 自动粘贴管理
 
 @MainActor
-final class AutoPasteManager {
+final class AutoPasteManager: ObservableObject {
     static let shared = AutoPasteManager()
+
+    /// 辅助功能权限状态的唯一数据源，各视图统一观察此处
+    @Published private(set) var isAccessibilityGranted: Bool
 
     private var observer: NSObjectProtocol?
     private var lastActiveApp: NSRunningApplication?
+    private var accessibilityPollTimer: Timer?
+    private var accessibilityPollElapsed: TimeInterval = 0
+    private static let accessibilityPollInterval: TimeInterval = 0.5
+    private static let accessibilityPollTimeout: TimeInterval = 60
+
+    private init() {
+        isAccessibilityGranted = Self.queryAccessibilityGranted()
+    }
 
     // MARK: - 前台应用追踪
 
@@ -359,19 +370,62 @@ final class AutoPasteManager {
 
     // MARK: - 权限管理
 
-    /// 检查当前是否已开启“辅助功能”权限（与系统设置开关同步）
-    var isAccessibilityGranted: Bool {
+    /// 向系统查询“辅助功能”权限的实时状态
+    private static func queryAccessibilityGranted() -> Bool {
         let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
         let options = [key: false] as CFDictionary
         return AXIsProcessTrustedWithOptions(options)
     }
 
-    /// 弹出系统“辅助功能”权限请求弹窗（仅在未授权时有效）
+    /// 重新读取系统权限状态并同步到 @Published
+    func refreshAccessibilityState() {
+        let granted = Self.queryAccessibilityGranted()
+        if granted != isAccessibilityGranted {
+            isAccessibilityGranted = granted
+        }
+        if granted {
+            stopAccessibilityPolling()
+        }
+    }
+
+    /// 弹出系统“辅助功能”权限请求弹窗，并开始轮询等待用户授权
     func requestAccessibilityIfNeeded() {
+        if !isAccessibilityGranted {
+            let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+            let options = [key: true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(options)
+        }
+        refreshAccessibilityState()
+        startAccessibilityPolling()
+    }
+
+    /// 轮询权限状态直到授权成功或超时。系统设置里的授权不会有通知，只能轮询
+    func startAccessibilityPolling() {
         guard !isAccessibilityGranted else { return }
-        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-        let options = [key: true] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(options)
+        stopAccessibilityPolling()
+        accessibilityPollElapsed = 0
+        // 闭包内不捕获 self 和 timer，避免跨隔离域传递非 Sendable 值
+        accessibilityPollTimer = Timer.scheduledTimer(
+            withTimeInterval: Self.accessibilityPollInterval,
+            repeats: true
+        ) { _ in
+            Task { @MainActor in
+                Self.shared.tickAccessibilityPoll()
+            }
+        }
+    }
+
+    private func tickAccessibilityPoll() {
+        accessibilityPollElapsed += Self.accessibilityPollInterval
+        refreshAccessibilityState()
+        if accessibilityPollElapsed >= Self.accessibilityPollTimeout {
+            stopAccessibilityPolling()
+        }
+    }
+
+    func stopAccessibilityPolling() {
+        accessibilityPollTimer?.invalidate()
+        accessibilityPollTimer = nil
     }
 
     /// 打开系统设置的"隐私与安全 > 辅助功能"面板
@@ -385,7 +439,7 @@ final class AutoPasteManager {
     @discardableResult
     func performAutoPaste() -> Bool {
         // 权限不足时不执行。主口径使用“辅助功能”，并保留 PostEvent 兜底。
-        let axTrusted = isAccessibilityGranted
+        let axTrusted = Self.queryAccessibilityGranted()
         let postEventTrusted = CGPreflightPostEventAccess()
         let trusted = axTrusted || postEventTrusted
         print("[AutoPaste] AX = \(axTrusted), PostEvent = \(postEventTrusted)")
@@ -441,4 +495,3 @@ final class AutoPasteManager {
         keyUp?.post(tap: .cghidEventTap)
     }
 }
-#endif
