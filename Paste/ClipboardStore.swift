@@ -117,7 +117,11 @@ enum ClipboardStorageOperations {
         timeFilter: TimeFilter,
         customDateFrom: Date? = nil,
         customDateTo: Date? = nil
-    ) -> ClipboardSnapshot {
+    ) throws -> ClipboardSnapshot {
+        // 固定本次读取的数据版本，避免其他 context 删除记录后，延迟加载的属性变成 nil。
+        // 此方法在专用的后台 context 队列中调用，列表和统计必须使用同一份快照。
+        try context.setQueryGenerationFrom(.current)
+
         let request = makeCardsRequest(
             filter: filter,
             searchText: searchText,
@@ -126,11 +130,19 @@ enum ClipboardStorageOperations {
             customDateTo: customDateTo
         )
 
-        guard let fetched = try? context.fetch(request) else {
-            return ClipboardSnapshot(cards: [], totalItems: 0, totalStorageBytes: 0)
-        }
+        let fetched = try context.fetch(request)
 
-        let cards = fetched.map { item in
+        let cards = fetched.compactMap { item -> ClipboardCard? in
+            // 经由 KVC 检查底层值，不能先访问非可选的 Swift 属性，否则桥接时就会崩溃。
+            guard
+                !item.isDeleted,
+                let id = item.value(forKey: "id") as? UUID,
+                let createdAt = item.value(forKey: "createdAt") as? Date,
+                !item.isDeleted
+            else {
+                return nil
+            }
+
             var imageWidth: Int?
             var imageHeight: Int?
             if item.kind == .image, let imageData = item.imageData,
@@ -145,9 +157,9 @@ enum ClipboardStorageOperations {
                 : .none
 
             return ClipboardCard(
-                id: item.id,
+                id: id,
                 kind: item.kind,
-                createdAt: item.createdAt,
+                createdAt: createdAt,
                 sourceAppName: item.sourceAppName ?? "Unknown",
                 sourceBundleID: item.sourceBundleID ?? "unknown.bundle",
                 previewText: item.previewText,
@@ -161,7 +173,7 @@ enum ClipboardStorageOperations {
         }
 
         let totalsRequest = ClipboardItem.fetchRequest()
-        let totals = (try? context.fetch(totalsRequest)) ?? []
+        let totals = try context.fetch(totalsRequest)
 
         return ClipboardSnapshot(
             cards: cards,
@@ -638,14 +650,21 @@ final class ClipboardStore: ObservableObject {
         backgroundContext.undoManager = nil
 
         backgroundContext.perform { [weak self] in
-            let snapshot = ClipboardStorageOperations.makeSnapshot(
-                in: backgroundContext,
-                filter: filter,
-                searchText: searchText,
-                timeFilter: timeFilter,
-                customDateFrom: customDateFrom,
-                customDateTo: customDateTo
-            )
+            let snapshot: ClipboardSnapshot
+            do {
+                snapshot = try ClipboardStorageOperations.makeSnapshot(
+                    in: backgroundContext,
+                    filter: filter,
+                    searchText: searchText,
+                    timeFilter: timeFilter,
+                    customDateFrom: customDateFrom,
+                    customDateTo: customDateTo
+                )
+            } catch {
+                // 读取失败时保留当前列表，不能继续使用未固定版本的 context。
+                NSLog("读取剪贴板快照失败：%@", error.localizedDescription)
+                return
+            }
 
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }

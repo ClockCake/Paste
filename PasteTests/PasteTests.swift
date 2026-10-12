@@ -102,6 +102,128 @@ struct PasteTests {
         #expect(items.first?.createdAt == Date(timeIntervalSince1970: 200))
     }
 
+    private func makeSQLiteContainer() throws -> (NSPersistentContainer, URL) {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let container = NSPersistentContainer(
+            name: "PasteSnapshotTests",
+            managedObjectModel: PersistenceController.makeManagedObjectModelForTesting()
+        )
+        let description = NSPersistentStoreDescription(url: directory.appendingPathComponent("Paste.sqlite"))
+        description.shouldAddStoreAsynchronously = false
+        container.persistentStoreDescriptions = [description]
+        var loadError: Error?
+        container.loadPersistentStores { _, error in loadError = error }
+        if let loadError { throw loadError }
+        return (container, directory)
+    }
+
+    private func removeSQLiteContainer(_ container: NSPersistentContainer, directory: URL) throws {
+        container.viewContext.reset()
+        for store in container.persistentStoreCoordinator.persistentStores {
+            try container.persistentStoreCoordinator.remove(store)
+        }
+        try FileManager.default.removeItem(at: directory)
+    }
+
+    @Test func snapshotKeepsDeletedRecordReadableUntilNextReload() throws {
+        let (container, directory) = try makeSQLiteContainer()
+        defer { try? removeSQLiteContainer(container, directory: directory) }
+        let writer = container.viewContext
+        let item = makeItem(
+            hash: "snapshot", text: "before deletion", sourceName: "Notes",
+            bundleID: "com.apple.Notes", createdAt: Date(), in: writer
+        )
+        try writer.save()
+        let objectID = item.objectID
+        let expectedID = item.id
+        let reader = container.newBackgroundContext()
+        defer { reader.performAndWait { reader.reset() } }
+
+        try reader.performAndWait {
+            let snapshot = try ClipboardStorageOperations.makeSnapshot(
+                in: reader, filter: .all, searchText: "", timeFilter: .all
+            )
+            #expect(snapshot.cards.map(\.id) == [expectedID])
+            #expect(snapshot.totalItems == 1)
+            // 主动退回 fault，模拟取到对象后、真正读取属性前发生删除。
+            reader.refresh(reader.object(with: objectID), mergeChanges: false)
+        }
+        writer.delete(item)
+        try writer.save()
+
+        reader.performAndWait {
+            let oldItem = reader.object(with: objectID)
+            #expect(oldItem.value(forKey: "id") as? UUID == expectedID)
+            #expect(oldItem.value(forKey: "textContent") as? String == "before deletion")
+        }
+
+        let nextReader = container.newBackgroundContext()
+        try nextReader.performAndWait {
+            defer { nextReader.reset() }
+            let snapshot = try ClipboardStorageOperations.makeSnapshot(
+                in: nextReader, filter: .all, searchText: "", timeFilter: .all
+            )
+            #expect(snapshot.cards.isEmpty)
+            #expect(snapshot.totalItems == 0)
+            #expect(snapshot.totalStorageBytes == 0)
+        }
+    }
+
+    @Test func snapshotSkipsMissingRequiredValues() throws {
+        let (container, directory) = try makeSQLiteContainer()
+        defer { try? removeSQLiteContainer(container, directory: directory) }
+        let context = container.viewContext
+        let valid = makeItem(
+            hash: "valid", text: "valid", sourceName: "Notes",
+            bundleID: "com.apple.Notes", createdAt: Date(), in: context
+        )
+        let expectedID = valid.id
+        for key in ["id", "createdAt"] {
+            let invalid = makeItem(
+                hash: key, text: "invalid", sourceName: "Notes",
+                bundleID: "com.apple.Notes", createdAt: Date(), in: context
+            )
+            // 模拟底层缺值，避免为了构造异常记录破坏持久化模型。
+            invalid.setValue(nil, forKey: key)
+        }
+        let snapshot = try ClipboardStorageOperations.makeSnapshot(
+            in: context, filter: .all, searchText: "", timeFilter: .all
+        )
+        #expect(snapshot.cards.map(\.id) == [expectedID])
+        #expect(snapshot.cards.first?.previewText == "valid")
+    }
+
+    @Test func snapshotPreservesFiltersAndGlobalTotals() throws {
+        let (container, directory) = try makeSQLiteContainer()
+        defer { try? removeSQLiteContainer(container, directory: directory) }
+        let context = container.viewContext
+        let favorite = makeItem(
+            hash: "favorite", text: "keep", sourceName: "Notes",
+            bundleID: "com.apple.Notes", createdAt: Date(timeIntervalSince1970: 200), in: context
+        )
+        favorite.isFavorite = true
+        makeItem(
+            hash: "other", text: "other", sourceName: "Notes",
+            bundleID: "com.apple.Notes", createdAt: Date(timeIntervalSince1970: 100), in: context
+        )
+        try context.save()
+        let expectedID = favorite.id
+        let reader = container.newBackgroundContext()
+        try reader.performAndWait {
+            defer { reader.reset() }
+            let snapshot = try ClipboardStorageOperations.makeSnapshot(
+                in: reader, filter: .favorites, searchText: "keep", timeFilter: .customRange,
+                customDateFrom: Date(timeIntervalSince1970: 0),
+                customDateTo: Date(timeIntervalSince1970: 300)
+            )
+            #expect(snapshot.cards.map(\.id) == [expectedID])
+            #expect(snapshot.cards.first?.isFavorite == true)
+            #expect(snapshot.totalItems == 2)
+            #expect(snapshot.totalStorageBytes == 9)
+        }
+    }
+
     @discardableResult
     private func makeItem(
         hash: String,
