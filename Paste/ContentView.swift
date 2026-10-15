@@ -34,9 +34,9 @@ struct ContentView: View {
         case search
     }
 
-    private let cardMinWidth: CGFloat = 260
+    private let cardMinWidth: CGFloat = 250
     private let gridSpacing: CGFloat = 16
-    private let contentPadding: CGFloat = 20
+    private let contentPadding: CGFloat = 28
 
     private var l: L { settings.l }
 
@@ -65,8 +65,7 @@ struct ContentView: View {
     private var cloudSyncStatusTint: Color {
         if store.cloudSyncErrorMessage != nil { return .orange }
         if !store.cloudSyncEnabled { return .secondary }
-        if store.cloudSyncInProgress { return .blue }
-        return .secondary
+        return PasteTheme.accent
     }
     private var cloudLastSyncedText: String? {
         guard store.cloudSyncEnabled else { return nil }
@@ -79,25 +78,23 @@ struct ContentView: View {
     // MARK: - Body
 
     var body: some View {
-        VStack(spacing: 0) {
-            cardArea
-            Divider()
-            statusBar
+        HStack(spacing: 0) {
+            sidebar
+            Rectangle()
+                .fill(PasteTheme.border)
+                .frame(width: 1)
+            VStack(spacing: 0) {
+                workspaceHeader
+                cardArea
+                statusBar
+            }
+            .background(PasteTheme.canvas)
         }
-        .frame(minWidth: 900, minHeight: 520)
+        .frame(minWidth: 900, minHeight: 560)
+        .tint(PasteTheme.accent)
+        .preferredColorScheme(settings.appearanceMode.colorScheme)
         .background(keyboardCommands)
         .navigationTitle(l.appTitle)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                filterPicker
-            }
-            ToolbarItemGroup(placement: .primaryAction) {
-                timeFilterMenu
-                searchField
-                deleteMenu
-                settingsButton
-            }
-        }
         .alert(l.clearAllConfirmTitle, isPresented: $showingClearAllAlert) {
             Button(l.cancel, role: .cancel) {}
             Button(l.clear, role: .destructive) {
@@ -155,7 +152,7 @@ struct ContentView: View {
                 store.updateTimeFilter(selectedTimeFilter)
             }
         }
-        .onChange(of: store.cards.count) { _ in
+        .onChange(of: store.cards.map(\.id)) { _ in
             syncSelection()
         }
         .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { date in
@@ -166,18 +163,160 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Toolbar
+    // MARK: - 侧边栏与工作区标题
 
-    private var filterPicker: some View {
-        Picker(selection: $selectedFilter) {
-            ForEach(ClipboardFilter.allCases) { filter in
-                Text(filter.localizedTitle(l)).tag(filter)
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "square.on.square")
+                    .font(.system(size: 21, weight: .semibold))
+                    .foregroundStyle(PasteTheme.accent)
+                    .frame(width: 38, height: 38)
+                    .background(PasteTheme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(l.appTitle)
+                        .font(.system(size: 23, weight: .semibold, design: .rounded))
+                        .tracking(-0.6)
+                    Text(l.clipboardHistory)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
             }
-        } label: {
-            EmptyView()
+            .padding(.horizontal, 20)
+            .padding(.top, 26)
+            .padding(.bottom, 34)
+
+            sidebarSectionTitle(l.library)
+            VStack(spacing: 5) {
+                sidebarItem(.all, title: l.allClips, symbol: "square.grid.2x2")
+                sidebarItem(.favorites, title: l.favoriteClips, symbol: "star")
+            }
+            .padding(.horizontal, 12)
+
+            sidebarSectionTitle(l.contentTypes)
+                .padding(.top, 27)
+            VStack(spacing: 5) {
+                sidebarItem(.text, title: l.filterText, symbol: "text.alignleft")
+                sidebarItem(.url, title: l.filterURL, symbol: "link")
+                sidebarItem(.image, title: l.filterImage, symbol: "photo")
+            }
+            .padding(.horizontal, 12)
+
+            Spacer(minLength: 24)
+
+            VStack(alignment: .leading, spacing: 10) {
+                cloudSyncStatusInline
+                    .font(.system(size: 11, weight: .medium))
+                if let syncedText = cloudLastSyncedText {
+                    Text(syncedText)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                HStack(spacing: 4) {
+                    Text(l.itemCount(store.totalItems))
+                    Text("·")
+                    Text(store.storageText)
+                }
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(PasteTheme.surface.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
+            .padding(12)
+
+            settingsButton
+                .padding(.horizontal, 12)
+                .padding(.bottom, 16)
         }
-        .pickerStyle(.segmented)
-        .frame(width: 320)
+        .frame(width: 196)
+        .frame(maxHeight: .infinity)
+        .background(PasteTheme.sidebar)
+    }
+
+    private func sidebarSectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 10, weight: .semibold))
+            .tracking(0.8)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 10)
+    }
+
+    private func sidebarItem(_ filter: ClipboardFilter, title: String, symbol: String) -> some View {
+        let isActive = selectedFilter == filter
+        return Button {
+            selectedFilter = filter
+        } label: {
+            HStack(spacing: 11) {
+                Image(systemName: symbol)
+                    .font(.system(size: 14, weight: isActive ? .semibold : .regular))
+                    .frame(width: 18)
+                Text(title)
+                    .font(.system(size: 12, weight: isActive ? .semibold : .medium))
+                Spacer(minLength: 0)
+                if filter == .all {
+                    Text("\(store.totalItems)")
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .monospacedDigit()
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(PasteTheme.surface.opacity(0.65), in: Capsule())
+                }
+            }
+            .foregroundStyle(isActive ? PasteTheme.accent : Color.primary.opacity(0.72))
+            .padding(.horizontal, 12)
+            .frame(height: 39)
+            .background(isActive ? PasteTheme.accent.opacity(0.11) : .clear, in: RoundedRectangle(cornerRadius: 9))
+            .contentShape(RoundedRectangle(cornerRadius: 9))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isActive ? .isSelected : [])
+    }
+
+    private var workspaceTitle: String {
+        switch selectedFilter {
+        case .all: return l.allClips
+        case .favorites: return l.favoriteClips
+        default: return selectedFilter.localizedTitle(l)
+        }
+    }
+
+    private var workspaceHeader: some View {
+        VStack(alignment: .leading, spacing: 23) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(workspaceTitle)
+                        .font(.system(size: 26, weight: .semibold))
+                        .tracking(-0.6)
+                    Text(selectedFilter == .favorites ? l.favoritesSubtitle : l.workspaceSubtitle)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                deleteMenu
+            }
+            HStack(spacing: 12) {
+                searchField
+                timeFilterMenu
+            }
+            HStack(spacing: 8) {
+                Text(l.itemCount(store.cards.count))
+                    .font(.system(size: 11, weight: .medium))
+                    .monospacedDigit()
+                Spacer()
+                Image(systemName: "arrow.down")
+                    .font(.system(size: 9, weight: .semibold))
+                Text(l.newestFirst)
+                    .font(.system(size: 10))
+            }
+            .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, contentPadding)
+        .padding(.top, 26)
+        .padding(.bottom, 4)
     }
 
     private var timeFilterMenu: some View {
@@ -206,19 +345,23 @@ struct ContentView: View {
                 }
             }
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: 7) {
                 Image(systemName: "calendar")
                 if selectedTimeFilter == .customRange,
                    let from = store.currentCustomDateFrom,
                    let to = store.currentCustomDateTo {
                     Text(l.customDateRangeLabel(from: from, to: to))
-                        .font(.caption)
-                } else if selectedTimeFilter != .all {
+                        .font(.system(size: 11, weight: .medium))
+                } else {
                     Text(selectedTimeFilter.localizedTitle(l))
-                        .font(.caption)
+                        .font(.system(size: 11, weight: .medium))
                 }
             }
-            .foregroundStyle(selectedTimeFilter != .all ? .primary : .secondary)
+            .foregroundStyle(selectedTimeFilter != .all ? PasteTheme.accent : Color.secondary)
+            .padding(.horizontal, 12)
+            .frame(height: 38)
+            .background(PasteTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(PasteTheme.border, lineWidth: 1))
             .contentShape(Rectangle())
         }
         .macOSBorderlessMenuStyle()
@@ -238,13 +381,14 @@ struct ContentView: View {
     }
 
     private var searchField: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 9) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
             TextField(l.searchPlaceholder, text: $searchText)
                 .textFieldStyle(.plain)
-                .frame(width: 130)
+                .font(.system(size: 12))
+                .accessibilityLabel(l.search)
                 .focused($focusedArea, equals: .search)
                 .platformOnExitCommand {
                     clearSearch()
@@ -258,14 +402,23 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(l.clear)
+            } else {
+                Text("⌘ F")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 3)
+                    .background(PasteTheme.inset, in: RoundedRectangle(cornerRadius: 4))
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background {
-            Capsule(style: .continuous)
-                .fill(.quaternary.opacity(0.5))
-        }
+        .padding(.horizontal, 12)
+        .frame(height: 38)
+        .background(PasteTheme.surface, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(
+            focusedArea == .search ? PasteTheme.accent.opacity(0.65) : PasteTheme.border,
+            lineWidth: 1
+        ))
         .platformHelp(l.search)
     }
 
@@ -311,11 +464,15 @@ struct ContentView: View {
                 Label(l.clearAll, systemImage: "trash")
             }
         } label: {
-            Image(systemName: "trash")
-                .symbolRenderingMode(.hierarchical)
+            Image(systemName: "ellipsis")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 32, height: 30)
+                .background(PasteTheme.surface, in: RoundedRectangle(cornerRadius: 8))
         }
         .macOSBorderlessMenuStyle()
         .platformHelp(l.deleteManage)
+        .accessibilityLabel(l.deleteManage)
         .popover(isPresented: $showingDeleteByDateSheet, arrowEdge: .bottom) {
             DatePickerSheet(
                 isPresented: $showingDeleteByDateSheet,
@@ -331,11 +488,25 @@ struct ContentView: View {
         Button {
             showingSettings.toggle()
         } label: {
-            Image(systemName: "gearshape")
-                .symbolRenderingMode(.hierarchical)
+            HStack(spacing: 11) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 14))
+                    .frame(width: 18)
+                Text(l.settings)
+                    .font(.system(size: 12, weight: .medium))
+                Spacer()
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .frame(height: 34)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
         .platformHelp(l.settings)
-        .popover(isPresented: $showingSettings, arrowEdge: .bottom) {
+        .popover(isPresented: $showingSettings, arrowEdge: .trailing) {
             SettingsView(isPresented: $showingSettings)
                 .environmentObject(settings)
                 .id(settingsViewId)
@@ -350,22 +521,22 @@ struct ContentView: View {
     // MARK: - 底部状态栏
 
     private var statusBar: some View {
-        HStack(spacing: 10) {
-            Text(l.itemCount(store.totalItems))
-            Text(store.storageText)
-            cloudSyncStatusInline
-            if let syncedText = cloudLastSyncedText {
-                Text(syncedText)
-            }
-            Spacer(minLength: 12)
+        HStack(spacing: 6) {
+            Image(systemName: "keyboard")
+                .font(.system(size: 12))
             Text(l.keyboardHint)
                 .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Spacer(minLength: 0)
         }
-        .font(.caption)
-        .foregroundStyle(.tertiary)
+        .font(.system(size: 10))
+        .foregroundStyle(.secondary)
         .padding(.horizontal, contentPadding)
-        .padding(.vertical, 6)
-        .background(.bar)
+        .padding(.vertical, 12)
+        .background(PasteTheme.canvas)
+        .overlay(alignment: .top) {
+            Rectangle().fill(PasteTheme.border.opacity(0.7)).frame(height: 1)
+        }
     }
 
     @ViewBuilder
@@ -417,19 +588,26 @@ struct ContentView: View {
             let columns = columnCount(forWidth: proxy.size.width)
             Group {
                 if store.cards.isEmpty {
-                    if searchText.isEmpty {
-                        emptyPlaceholder(
-                            symbol: "clipboard",
-                            title: l.emptyStateTitle,
-                            subtitle: l.emptyStateSubtitle,
-                            tinted: true
-                        )
-                    } else {
+                    if !searchText.isEmpty {
                         emptyPlaceholder(
                             symbol: "magnifyingglass",
                             title: l.noSearchResults,
                             subtitle: l.noSearchResultsHint,
                             tinted: false
+                        )
+                    } else if selectedFilter != .all || selectedTimeFilter != .all {
+                        emptyPlaceholder(
+                            symbol: selectedFilter == .favorites ? "star" : "line.3.horizontal.decrease.circle",
+                            title: l.noFilteredResults,
+                            subtitle: l.noFilteredResultsHint,
+                            tinted: true
+                        )
+                    } else {
+                        emptyPlaceholder(
+                            symbol: "clipboard",
+                            title: l.emptyStateTitle,
+                            subtitle: l.emptyStateSubtitle,
+                            tinted: true
                         )
                     }
                 } else {
@@ -446,10 +624,11 @@ struct ContentView: View {
         ScrollViewReader { scrollProxy in
             ScrollView {
                 LazyVGrid(columns: gridColumns, spacing: gridSpacing) {
-                    ForEach(store.cards) { card in
+                    ForEach(Array(store.cards.enumerated()), id: \.element.id) { index, card in
                         ClipboardCardView(
                             card: card,
                             now: nowTick,
+                            shortcutNumber: index < 9 ? index + 1 : nil,
                             isSelected: card.id == selectedCardID,
                             isAutoPasteEnabled: isAutoPasteEnabled,
                             onSelect: { selectedCardID = card.id; focusedArea = .grid },
@@ -460,12 +639,14 @@ struct ContentView: View {
                         )
                         .environmentObject(store)
                         .environmentObject(settings)
+                        .id(card.id)
                     }
                 }
                 .padding(contentPadding)
                 .animation(.easeInOut(duration: 0.18), value: store.cards.count)
             }
             .focusable()
+            .macOSCardGridFocusStyle()
             .focused($focusedArea, equals: .grid)
             .onMoveCommand { direction in
                 moveSelection(direction)
@@ -493,28 +674,35 @@ struct ContentView: View {
         subtitle: String,
         tinted: Bool
     ) -> some View {
-        VStack(spacing: 12) {
-            Group {
-                if tinted {
-                    Image(systemName: symbol)
-                        .foregroundStyle(.linearGradient(
-                            colors: [.blue.opacity(0.6), .purple.opacity(0.6)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ))
-                } else {
-                    Image(systemName: symbol)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .font(.system(size: 40, weight: .light))
+        VStack(spacing: 20) {
+            Image(systemName: symbol)
+                .font(.system(size: 31, weight: .light))
+                .foregroundStyle(tinted ? PasteTheme.accent : Color.secondary)
+                .frame(width: 82, height: 82)
+                .background(PasteTheme.surface, in: RoundedRectangle(cornerRadius: 24))
+                .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(PasteTheme.border, lineWidth: 1))
+                .rotationEffect(.degrees(-5))
 
-            Text(title)
-                .font(.title3.weight(.medium))
-                .foregroundStyle(.secondary)
-            Text(subtitle)
-                .font(.callout)
-                .foregroundStyle(.tertiary)
+            VStack(spacing: 8) {
+                Text(title)
+                    .font(.system(size: 17, weight: .semibold))
+                Text(subtitle)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            if selectedFilter != .all || selectedTimeFilter != .all || !searchText.isEmpty {
+                Button(l.resetFilters) {
+                    selectedFilter = .all
+                    selectedTimeFilter = .all
+                    clearSearch()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(PasteTheme.accent)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(PasteTheme.accent.opacity(0.09), in: Capsule())
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -699,10 +887,16 @@ private struct ClipboardCardView: View {
     @EnvironmentObject private var store: ClipboardStore
     @EnvironmentObject private var settings: SettingsManager
     @State private var isHovered = false
+    @FocusState private var focusedAction: CardAction?
+
+    private enum CardAction: Hashable {
+        case favorite, delete, copy
+    }
 
     let card: ClipboardCard
     /// 由外部统一驱动的“当前时间”，保证相对时间文案会随时间刷新
     let now: Date
+    let shortcutNumber: Int?
     let isSelected: Bool
     let isAutoPasteEnabled: Bool
     let onSelect: () -> Void
@@ -712,64 +906,102 @@ private struct ClipboardCardView: View {
     let onToggleFavorite: () -> Void
 
     private var l: L { settings.l }
-    private let thumbnailHeight: CGFloat = 132
-    private let defaultTextLineLimit = 6
+    private let thumbnailHeight: CGFloat = 116
+    private let defaultTextLineLimit = 5
+
+    private var showsActions: Bool {
+        isHovered || isSelected || focusedAction != nil
+    }
 
     private var borderColor: Color {
-        if isSelected { return .accentColor }
-        if isHovered { return .accentColor.opacity(0.4) }
-        return .primary.opacity(0.06)
+        if isSelected { return PasteTheme.accent.opacity(0.85) }
+        if isHovered { return PasteTheme.accent.opacity(0.4) }
+        return PasteTheme.border.opacity(0.8)
     }
 
     private var borderWidth: CGFloat {
-        isSelected ? 2 : 1
+        isSelected ? 1.5 : 1
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // 顶部：左边图标+程序名，右边删除按钮
-            HStack {
+        VStack(alignment: .leading, spacing: 14) {
+            // 来源与时间在一处呈现，操作按钮在悬停或选中时突出。
+            HStack(spacing: 8) {
                 sourceIcon
-                Text(card.sourceAppName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer()
-                HStack(spacing: 6) {
-                    if card.isFavorite {
-                        Image(systemName: "star.fill")
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(card.sourceAppName)
+                        .font(.system(size: 11, weight: .medium))
+                        .lineLimit(1)
+                    Text(l.relativeTimeSince(card.createdAt, now: now, fallbackToDateAfterDays: 7))
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 2)
+                HStack(spacing: 4) {
+                    Button(action: onToggleFavorite) {
+                        Image(systemName: card.isFavorite ? "star.fill" : "star")
                             .font(.system(size: 12))
-                            .foregroundStyle(.yellow)
-                    }
-                    Button(role: .destructive, action: onDelete) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 18))
-                            .foregroundStyle(.secondary)
-                            .opacity(isHovered ? 1 : 0.5)
+                            .foregroundStyle(card.isFavorite ? Color.orange : Color.secondary)
+                            .frame(width: 23, height: 25)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .focused($focusedAction, equals: .favorite)
+                    .opacity(card.isFavorite || showsActions ? 1 : 0)
+                    .platformHelp(card.isFavorite ? l.unfavorite : l.favorite)
+                    .accessibilityLabel(card.isFavorite ? l.unfavorite : l.favorite)
+                    Button(role: .destructive, action: onDelete) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 23, height: 25)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focused($focusedAction, equals: .delete)
+                    .opacity(showsActions ? 1 : 0)
                     .platformHelp(l.delete)
+                    .accessibilityLabel(l.delete)
                 }
             }
 
             content
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-            Spacer(minLength: 4)
-
-            // 底部：左边字符数/尺寸，右边时间
-            HStack {
+            HStack(spacing: 6) {
+                Image(systemName: card.kind.symbolName)
+                    .font(.system(size: 10))
+                    .foregroundStyle(PasteTheme.accent.opacity(0.8))
                 Text(contentMetaText)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                Spacer()
-                Text(l.relativeTimeSince(card.createdAt, now: now, fallbackToDateAfterDays: 7))
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if let shortcutNumber {
+                    Text("⌘\(shortcutNumber)")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .opacity(showsActions ? 0 : 0.7)
+                        .accessibilityHidden(true)
+                }
+                Button(action: onCopy) {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 11))
+                        .foregroundStyle(PasteTheme.accent)
+                        .frame(width: 25, height: 22)
+                        .background(PasteTheme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 5))
+                }
+                .buttonStyle(.plain)
+                .focused($focusedAction, equals: .copy)
+                .opacity(showsActions ? 1 : 0)
+                .platformHelp(l.copy)
+                .accessibilityLabel(l.copy)
             }
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, minHeight: 176, maxHeight: .infinity, alignment: .topLeading)
-        .contentShape(Rectangle())
+        .padding(16)
+        .frame(maxWidth: .infinity)
+        .frame(height: 232, alignment: .topLeading)
+        .contentShape(RoundedRectangle(cornerRadius: 14))
         // 双击必须先声明，否则会被单击手势抢先消费
         .onTapGesture(count: 2, perform: onActivate)
         .onTapGesture(perform: onSelect)
@@ -793,11 +1025,11 @@ private struct ClipboardCardView: View {
         }
         .background {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(.background)
+                .fill(PasteTheme.surface)
                 .shadow(
-                    color: .black.opacity(isHovered || isSelected ? 0.13 : 0.08),
-                    radius: isHovered || isSelected ? 10 : 6,
-                    y: 2
+                    color: .black.opacity(isHovered ? 0.07 : 0.025),
+                    radius: isHovered ? 12 : 4,
+                    y: isHovered ? 4 : 2
                 )
         }
         .overlay {
@@ -810,6 +1042,8 @@ private struct ClipboardCardView: View {
             isHovered = hovering
         }
         .platformHelp(isAutoPasteEnabled ? l.doubleClickToPaste : l.clickToCopy)
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     @ViewBuilder
@@ -818,10 +1052,24 @@ private struct ClipboardCardView: View {
         case .text:
             smartContentView
         case .url:
-            Text(card.previewText)
-                .font(.body)
-                .lineLimit(3)
-                .foregroundStyle(.blue)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 7) {
+                    Image(systemName: "arrow.up.right.square")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(PasteTheme.accent)
+                    Text(URL(string: card.previewText)?.host ?? l.kindURL)
+                        .font(.system(size: 14, weight: .semibold))
+                        .lineLimit(1)
+                }
+                Text(card.previewText)
+                    .font(.system(size: 12))
+                    .lineSpacing(3)
+                    .lineLimit(3)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, minHeight: thumbnailHeight, alignment: .topLeading)
+            .background(PasteTheme.accent.opacity(0.055), in: RoundedRectangle(cornerRadius: 9))
         case .image:
             CachedThumbnailView(key: card.thumbnailKey)
                 .environmentObject(store)
@@ -852,8 +1100,10 @@ private struct ClipboardCardView: View {
             )
         case .none:
             Text(card.previewText)
-                .font(.body)
+                .font(.system(size: 14))
+                .lineSpacing(4)
                 .lineLimit(defaultTextLineLimit)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
         }
     }
 
@@ -866,7 +1116,8 @@ private struct ClipboardCardView: View {
 
         return RoundedRectangle(cornerRadius: 10, style: .continuous)
             .fill(color)
-            .frame(maxWidth: .infinity, minHeight: 100, maxHeight: 132)
+            .frame(maxWidth: .infinity)
+            .frame(height: thumbnailHeight)
             .overlay(alignment: .bottom) {
                 // 半透明色叠一层渐变，便于看出透明度
                 if a < 1 {
@@ -896,19 +1147,21 @@ private struct ClipboardCardView: View {
 
     /// 带图标的内容预览（电话、邮箱等）
     private func iconLabelPreview(icon: String, iconColor: Color, text: String) -> some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 10) {
             Image(systemName: icon)
-                .font(.system(size: 32))
+                .font(.system(size: 23, weight: .light))
                 .foregroundStyle(iconColor.opacity(0.8))
                 .frame(maxWidth: .infinity, alignment: .center)
 
             Text(text)
-                .font(.system(.body, design: .monospaced))
+                .font(.system(size: 13, weight: .medium, design: .monospaced))
                 .lineLimit(3)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
         }
-        .frame(maxWidth: .infinity, minHeight: 80)
+        .frame(maxWidth: .infinity)
+        .frame(height: thumbnailHeight)
+        .background(iconColor.opacity(0.045), in: RoundedRectangle(cornerRadius: 9))
     }
 
     // MARK: - Helpers
@@ -943,11 +1196,11 @@ private struct ClipboardCardView: View {
             Image(platformImage: icon)
                 .resizable()
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .frame(width: 28, height: 28)
+                .frame(width: 26, height: 26)
         } else {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(sourceBadgeColor.opacity(0.16))
-                .frame(width: 28, height: 28)
+                .frame(width: 26, height: 26)
                 .overlay {
                     if let symbol = sourceFallbackSymbol {
                         Image(systemName: symbol)

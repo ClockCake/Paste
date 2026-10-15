@@ -40,6 +40,19 @@ struct L {
     // 应用标题
     var appTitle: String { "Paste" }
 
+    // 主窗口
+    var library: String { lang == .zh ? "资料库" : "LIBRARY" }
+    var contentTypes: String { lang == .zh ? "内容类型" : "CONTENT TYPES" }
+    var clipboardHistory: String { lang == .zh ? "剪贴板历史" : "Clipboard history" }
+    var allClips: String { lang == .zh ? "全部记录" : "All clips" }
+    var favoriteClips: String { lang == .zh ? "我的收藏" : "Favorites" }
+    var workspaceSubtitle: String { lang == .zh ? "复制过的灵感，随时在这里。" : "Everything you copy, within reach." }
+    var favoritesSubtitle: String { lang == .zh ? "把常用内容，留在手边。" : "Keep your essentials close." }
+    var newestFirst: String { lang == .zh ? "最近复制优先" : "Newest first" }
+    var noFilteredResults: String { lang == .zh ? "这里还没有记录" : "No clips here yet" }
+    var noFilteredResultsHint: String { lang == .zh ? "试试其他分类或时间范围" : "Try another category or time range" }
+    var resetFilters: String { lang == .zh ? "查看全部记录" : "Show all clips" }
+
     // 统计信息
     func itemCount(_ count: Int) -> String {
         lang == .zh ? "\(count) 条记录" : "\(count) items"

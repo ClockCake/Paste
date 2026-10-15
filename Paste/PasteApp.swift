@@ -34,9 +34,9 @@ struct PasteApp: App {
                 .environmentObject(runtime.settings)
                 .environmentObject(runtime)
                 .environment(\.managedObjectContext, PersistenceController.shared.container.viewContext)
-                .preferredColorScheme(runtime.settings.appearanceMode.colorScheme)
         }
-        // 工具栏与标题栏合并为一行，给筛选和搜索留出横向空间
-        .windowToolbarStyle(.unified)
+        // 使用原生交通灯和拖动区域，内容区承载搜索与分类。
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1180, height: 760)
     }
 }
